@@ -1,0 +1,13 @@
+{
+  "name": "csv_source",
+  "kind": "metric_source",
+  "version": "0.1.0",
+  "label": "CSV 文件指标源（示例）",
+  "description": "从本地 CSV（date,metric,value）读取指标。示例外部插件，演示协议；可用于手工补数或导入付费数据导出。",
+  "metrics": [
+    {"id": "user.csv_demo", "name": "CSV 示例指标", "unit": "", "market": "CN", "note": "来自 examples/plugins/csv_source/sample.csv"}
+  ],
+  "config": [
+    {"key": "path", "label": "CSV 文件路径", "help": "相对路径以插件目录为准，默认 sample.csv", "required": false}
+  ]
+}

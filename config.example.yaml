@@ -43,3 +43,10 @@ stocks:
 # 场外基金净值：只同步在“基金”页添加的自选基金。
 funds:
   sources: [eastmoney]
+
+# 外部进程插件（协议见 docs/plugin-protocol.md）。可执行文件与参数只能在这里配置，Web 不能修改。
+# plugins:
+#   - dir: examples/plugins/csv_source      # 含 plugin.json 的插件目录，也是进程的工作目录
+#     command: [python, -I, main.py]
+#     timeout_s: 60
+#     config: {path: sample.csv}

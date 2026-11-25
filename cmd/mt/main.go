@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,8 @@ import (
 	_ "market-thermometer/internal/notify/feishu"
 	_ "market-thermometer/internal/notify/telegram"
 	_ "market-thermometer/internal/notify/wecom"
+	"market-thermometer/internal/plugin"
+	"market-thermometer/internal/plugin/ext"
 	"market-thermometer/internal/store"
 	"market-thermometer/internal/web"
 	"market-thermometer/internal/webui"
@@ -95,9 +98,27 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
+	enabled := cfg.Sources.Enabled
+	for _, pc := range cfg.Plugins { // 外部插件须在构建 Hub 之前登记（清单中的新指标在此定义）
+		if pc.Disabled {
+			continue
+		}
+		dir, _ := filepath.Abs(pc.Dir)
+		p, err := ext.Install(ext.Spec{Dir: dir, Command: pc.Command, Timeout: time.Duration(pc.TimeoutS) * time.Second})
+		if err != nil {
+			log.Printf("外部插件 %s 加载失败（已跳过）：%v", pc.Dir, err)
+			continue
+		}
+		p.SetConfig(pc.Config)
+		m := p.Manifest()
+		if m.Kind == plugin.KindMetric && len(enabled) > 0 {
+			enabled = append(enabled, m.Name)
+		}
+		log.Printf("外部插件 %s（%s %s）已登记", m.Name, plugin.KindLabel[m.Kind], m.Version)
+	}
 	// 数据源默认直连（A股接口在大陆直连最稳）；http_proxy 只给需要翻墙的出站请求用。
 	env := ds.Env{HTTP: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: nil}}, Now: time.Now}
-	hub, err := ds.NewHub(env, cfg.Sources.Enabled, cfg.Sources.Routes, cfg.Sources.Options)
+	hub, err := ds.NewHub(env, enabled, cfg.Sources.Routes, cfg.Sources.Options)
 	if err != nil {
 		st.Close()
 		return nil, err
@@ -158,6 +179,7 @@ func cmdServe(args []string) error {
 		return err
 	}
 	defer a.store.Close()
+	defer ext.CloseAll()
 	if a.cfg.AdminPasswordHash == "" {
 		return errors.New("config.yaml 未设置 admin_password_hash：先运行 `mt hashpw` 生成")
 	}

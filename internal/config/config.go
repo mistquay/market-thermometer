@@ -20,6 +20,17 @@ type Config struct {
 	Sources       Sources `yaml:"sources"`
 	Stocks        Stocks  `yaml:"stocks"`
 	Funds         Funds   `yaml:"funds"`
+	// Plugins 是外部进程插件。可执行文件与参数只能在这里配置（Web 不能新增或修改）。
+	Plugins []Plugin `yaml:"plugins"`
+}
+
+// Plugin 是一个外部进程插件：dir 下须有 plugin.json 清单，进程以 dir 为工作目录启动。
+type Plugin struct {
+	Dir      string            `yaml:"dir"`
+	Command  []string          `yaml:"command"`   // 可执行文件与参数，如 [python, -I, main.py]
+	TimeoutS int               `yaml:"timeout_s"` // 单次调用超时（秒），默认 60
+	Config   map[string]string `yaml:"config"`    // 下发给插件的配置（Web 上修改后以数据库为准）
+	Disabled bool              `yaml:"disabled"`
 }
 
 // Funds 是场外基金净值数据源配置（只同步自选基金）。
