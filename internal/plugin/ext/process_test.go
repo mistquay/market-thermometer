@@ -160,10 +160,10 @@ func TestTimeoutCrashAndRestartLimit(t *testing.T) {
 	if _, err := ms.Fetch(context.Background(), "x", from, to); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	// 10 分钟内启动超过 5 次后暂停
+	// 10 分钟内启动超过 5 次后暂停（改配置引起的重启不计数，所以从 0 开始）
 	p.SetConfig(map[string]string{"mode": "crash"})
 	var last error
-	for range 5 {
+	for range 6 {
 		_, last = ms.Fetch(context.Background(), "x", from, to)
 	}
 	if last == nil || !strings.Contains(last.Error(), "暂停调用") {

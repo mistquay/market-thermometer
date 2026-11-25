@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 )
@@ -33,12 +34,16 @@ func NewHub(env Env, enabled []string, routes map[string][]string, options map[s
 		h.order = append(h.order, name)
 	}
 	for m, names := range routes {
+		var kept []string
 		for _, n := range names {
 			if _, ok := h.sources[n]; !ok {
-				return nil, fmt.Errorf("datasource: route %s references disabled or unknown plugin %q", m, n)
+				// 引用了未启用或加载失败的插件（如外部插件进程配置有误）：忽略该项，不让服务因此起不来
+				log.Printf("数据源路由 %s 引用了未启用或不存在的插件 %q，已忽略", m, n)
+				continue
 			}
+			kept = append(kept, n)
 		}
-		h.routes[MetricID(m)] = names
+		h.routes[MetricID(m)] = kept
 	}
 	return h, nil
 }

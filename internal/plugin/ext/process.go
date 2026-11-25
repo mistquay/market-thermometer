@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,6 +97,7 @@ func (p *Process) SetConfig(cfg map[string]string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.config = cfg
+	p.starts = nil // 主动重启不计入崩溃重启次数
 	p.stopLocked()
 }
 
@@ -139,7 +141,7 @@ func (p *Process) SetEnabled(on bool) {
 func (p *Process) Config() map[string]string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.config
+	return maps.Clone(p.config)
 }
 
 func (p *Process) callLocked(ctx context.Context, method string, params, result any) error {
@@ -189,7 +191,10 @@ func (p *Process) startLocked(ctx context.Context) error {
 		return fmt.Errorf("启动插件 %s：%w", p.manifest.Name, err)
 	}
 	lines, done := make(chan []byte, 1), make(chan struct{})
+	var readers sync.WaitGroup // 管道读完之后才能 Wait（os/exec 的要求）
+	readers.Add(2)
 	go func() {
+		defer readers.Done()
 		defer close(lines)
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 64<<10), maxLine)
@@ -205,13 +210,14 @@ func (p *Process) startLocked(ctx context.Context) error {
 		}
 	}()
 	go func() {
+		defer readers.Done()
 		sc := bufio.NewScanner(stderr)
 		sc.Buffer(make([]byte, 4<<10), 1<<20)
 		for sc.Scan() {
 			p.logStderr(sc.Text())
 		}
 	}()
-	go func() { _ = cmd.Wait() }()
+	go func() { readers.Wait(); _ = cmd.Wait() }()
 	p.cmd, p.stdin, p.lines, p.done = cmd, stdin, lines, done
 	p.setInfo(func(s *Status) { s.Running, s.PID, s.Starts = true, cmd.Process.Pid, len(p.starts) })
 	init := map[string]any{"protocol": ProtocolVersion, "config": orEmpty(p.config)}

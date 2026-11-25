@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -45,6 +46,7 @@ type Runner struct {
 	stockConc int
 	funds     []ds.StockSource // 场内基金日线数据源顺序；为空时同 stocks
 	skipFunds bool             // 不同步场内基金日线
+	fallbacks atomic.Int64     // 本次同步回退到次级数据源的次数
 	fundNAV   []ds.FundSource  // 场外基金净值数据源
 
 	mu  sync.Mutex

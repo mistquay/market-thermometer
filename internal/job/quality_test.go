@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -191,5 +192,49 @@ func TestSyncEmptyFirst(t *testing.T) {
 	}
 	if len(src.order) != 3 || src.order[0] != "510300" {
 		t.Fatalf("order: %v", src.order)
+	}
+}
+
+// downList：清单接口失败、日线也失败的主源（模拟 stockdb 没启动）。
+type downList struct{ srcStocks }
+
+func (d *downList) ListStocks(context.Context) ([]ds.Stock, error) {
+	return nil, errors.New("connection refused")
+}
+func (d *downList) Bars(context.Context, string, string, string) ([]ds.StockBar, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestSyncSkipsWhenListSourceDown(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 7, 10, 20, 0, 0, 0, ds.Shanghai)
+	var list []ds.Stock
+	for i := range 80 {
+		list = append(list, ds.Stock{Code: fmt.Sprintf("600%03d", i), Kind: ds.KindStock})
+	}
+	if err := st.UpsertStockList(ctx, list, now); err != nil {
+		t.Fatal(err)
+	}
+	backup := &orderStocks{srcStocks: srcStocks{name: "backup", bars: map[string][]ds.StockBar{}}}
+	r := NewRunner(st, nil, market.CN, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	r.now = func() time.Time { return now }
+	r.SetStocks([]ds.StockSource{&downList{srcStocks{name: "primary"}}, backup}, 2)
+	if _, err := r.begin("breadth"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.syncStocks(ctx); err != nil || len(backup.order) != 0 {
+		t.Fatalf("list down: err=%v backup calls=%d", err, len(backup.order))
+	}
+
+	// 清单正常但主源日线全部失败：回退到次级源最多 fallbackLimit 只
+	r.SetStocks([]ds.StockSource{&orderStocks{srcStocks: srcStocks{name: "lister", fail: true}}, backup}, 1)
+	_ = r.syncStocks(ctx) // 大量失败会返回错误，这里只关心回退次数
+	if len(backup.order) != fallbackLimit {
+		t.Fatalf("fallbacks = %d, want %d", len(backup.order), fallbackLimit)
 	}
 }

@@ -19,6 +19,8 @@ const (
 	// stockRevisitDays：每次同步往回重拉的自然日数（约 10 个交易日），覆盖本地已有数据。
 	// 数据源当日先发布临时数据、事后校对（stockdb 盘后 15:00 更新、24:00 校对入库），不重拉会把临时值永久留在本地。
 	stockRevisitDays = 15
+	// fallbackLimit：一次同步中最多有多少只证券回退到次级数据源（主源偶发失败时补救，主源整体不可用时不拖垮次级源）。
+	fallbackLimit = 50
 )
 
 // ErrNoStockSource 表示未配置个股数据源。
@@ -68,7 +70,11 @@ func (r *Runner) listStocks(ctx context.Context) ([]ds.Stock, string, error) {
 // fetchBars 依次尝试各数据源，返回第一个成功的结果及来源名。
 func (r *Runner) fetchBars(ctx context.Context, code, kind, from string) ([]ds.StockBar, string, error) {
 	var errs []error
-	for _, s := range r.chain(kind) {
+	for i, s := range r.chain(kind) {
+		if i > 0 && r.fallbacks.Add(1) > fallbackLimit {
+			errs = append(errs, fmt.Errorf("本次同步回退到次级数据源已超过 %d 只，不再回退（避免触发限流）", fallbackLimit))
+			break
+		}
 		bars, err := s.Bars(ctx, code, from, "")
 		if err == nil {
 			return bars, s.Name(), nil
@@ -144,11 +150,14 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 		return ErrNoStockSource
 	}
 	srcList, listFrom, err := r.listStocks(ctx)
-	if err != nil || srcList == nil {
-		if err != nil {
-			r.logf("✗ 证券清单：%v", err)
-		}
-		r.logf("没有数据源能提供证券清单，沿用本地清单（新上市证券要等清单源恢复后才会加入）")
+	if err != nil {
+		// 清单源（通常是本机 stockdb）不可用：本轮跳过，不逐只回退到在线源，否则全市场请求会触发限流（如腾讯 WAF）
+		r.logf("✗ 证券清单：%v", err)
+		r.logf("清单数据源不可用，本轮跳过个股日线同步（市场广度用本地已有数据计算）")
+		return nil
+	}
+	if srcList == nil {
+		r.logf("没有数据源提供证券清单，沿用本地清单（新上市证券要等配置了清单源后才会加入）")
 	} else if err := r.store.UpsertStockList(ctx, srcList, r.now()); err != nil {
 		return err
 	}
@@ -156,6 +165,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.fallbacks.Store(0)
 	if len(local) == 0 {
 		return errors.New("本地没有证券清单，且数据源无法提供")
 	}

@@ -56,9 +56,14 @@ func TestHubExplicitRouteAndAllFail(t *testing.T) {
 	}
 }
 
-func TestHubRejectsUnknownRouteSource(t *testing.T) {
-	if _, err := NewHub(Env{}, []string{"test-ok"}, map[string][]string{"test.m": {"test-broken"}}, nil); err == nil {
-		t.Fatal("route to a disabled plugin must be rejected")
+func TestHubIgnoresUnknownRouteSource(t *testing.T) {
+	// 路由引用未启用的插件（如加载失败的外部插件）：忽略该项而不是让服务起不来
+	h, err := NewHub(Env{}, []string{"test-ok"}, map[string][]string{"test.m": {"test-broken", "test-ok"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := h.Route("test.m"); len(r) != 1 || r[0] != "test-ok" {
+		t.Fatalf("route = %v", r)
 	}
 }
 
