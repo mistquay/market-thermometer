@@ -44,6 +44,7 @@ type Runner struct {
 	stocks    []ds.StockSource // 个股 / 场内基金日线数据源，按顺序回退；为空则不同步
 	stockConc int
 	funds     []ds.StockSource // 场内基金日线数据源顺序；为空时同 stocks
+	fundNAV   []ds.FundSource  // 场外基金净值数据源
 
 	mu  sync.Mutex
 	cur *Status
@@ -172,6 +173,16 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 		}
 	} else if len(r.stocks) > 0 {
 		r.logf("个股日线尚未回填，跳过市场广度（在数据页点击“回填市场广度”）")
+	}
+	// 自选场外基金净值
+	if len(r.fundNAV) > 0 && ctx.Err() == nil {
+		if err := r.syncFunds(ctx); err != nil {
+			r.logf("✗ 基金净值：%v", err)
+			if state == "done" {
+				state = "partial"
+			}
+			detail += "；基金净值失败"
+		}
 	}
 	r.score(ctx, &state, &detail)
 	r.finish(id, state, detail)

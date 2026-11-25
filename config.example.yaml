@@ -33,3 +33,7 @@ stocks:
   options:
     stockdb:
       url: http://127.0.0.1:7899
+
+# 场外基金净值：只同步在“基金”页添加的自选基金。
+funds:
+  sources: [eastmoney]

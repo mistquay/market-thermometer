@@ -25,7 +25,7 @@ export type Series = { metric: string; source: string; points: Point[] }
 
 export type JobStatus = {
   id: number
-  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill'
+  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds'
   state: 'running' | 'done' | 'failed' | 'partial'
   total: number
   done: number
@@ -43,6 +43,10 @@ export type JobRun = {
   startedAt: string
   finishedAt: string
 }
+
+export type FundInfo = { code: string; name: string; type: string }
+export type FundNAV = { date: string; nav: number; accNav: number }
+export type WatchedFund = FundInfo & { first: string; last: string; count: number; nav: number; accNav: number; addedAt: string }
 
 export type Num = number | null
 
@@ -185,5 +189,11 @@ export const api = {
     request<{ version: string }>('POST', '/api/params', { name, params, activate }),
   backtest: (params: FullParams | null, config: { from: string; split: string }) =>
     request<BacktestResp>('POST', '/api/backtest', { params: params ?? undefined, config }),
+  funds: () => request<{ watched: WatchedFund[]; infoCount: number; configured: boolean }>('GET', '/api/funds'),
+  searchFunds: (q: string) => request<FundInfo[]>('GET', `/api/funds/search?q=${encodeURIComponent(q)}`),
+  watchFund: (code: string) => request<{ ok: boolean }>('POST', '/api/funds/watch', { code }),
+  unwatchFund: (code: string) => request<{ ok: boolean }>('DELETE', `/api/funds/watch/${code}`),
+  fundNAV: (code: string) => request<FundNAV[]>('GET', `/api/funds/${code}/nav`),
+  startFunds: () => request<JobStatus>('POST', '/api/jobs/funds'),
   jobs: () => request<JobRun[]>('GET', '/api/jobs'),
 }

@@ -76,6 +76,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate breadth: %w", err)
 	}
+	if err := st.migrateFunds(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate funds: %w", err)
+	}
 	return st, nil
 }
 

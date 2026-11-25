@@ -127,6 +127,16 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		st.Close()
 		return nil, err
 	}
+	var fundSrcs []ds.FundSource
+	for _, name := range cfg.Funds.Sources {
+		src, err := ds.BuildFund(name, env)
+		if err != nil {
+			st.Close()
+			return nil, err
+		}
+		fundSrcs = append(fundSrcs, src)
+	}
+	runner.SetFundNAVSources(fundSrcs)
 	return &app{cfg: cfg, store: st, hub: hub, runner: runner}, nil
 }
 

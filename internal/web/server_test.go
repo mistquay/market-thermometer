@@ -162,3 +162,33 @@ func TestBacktestAndParamsAPI(t *testing.T) {
 		t.Fatalf("signals: %d", w.Code)
 	}
 }
+
+func TestFundsAPI(t *testing.T) {
+	h, st := newTestServerStore(t)
+	ctx := context.Background()
+	_ = st.ReplaceFundInfo(ctx, []ds.FundInfo{{Code: "110022", Name: "易方达消费行业股票", Type: "股票型"}, {Code: "000001", Name: "华夏成长混合", Type: "混合型"}}, time.Now())
+	_ = st.SaveFundNAV(ctx, "110022", "test", []ds.FundNAV{{Date: "2026-11-23", NAV: 2.995, AccNAV: 3.115}, {Date: "2026-11-24", NAV: 2.985, AccNAV: 3.105}})
+	ck := do(h, "POST", "/api/auth/login", `{"password":"correct-horse"}`, nil, "").Result().Cookies()
+	if w := do(h, "GET", "/api/funds/search?q=%E6%B6%88%E8%B4%B9", "", ck, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "110022") || strings.Contains(w.Body.String(), "000001") {
+		t.Fatalf("search: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, "POST", "/api/funds/watch", `{"code":"11002"}`, ck, ""); w.Code != 400 {
+		t.Fatalf("bad code accepted: %d", w.Code)
+	}
+	if w := do(h, "POST", "/api/funds/watch", `{"code":"110022"}`, ck, ""); w.Code != 200 {
+		t.Fatalf("watch: %d %s", w.Code, w.Body)
+	}
+	w := do(h, "GET", "/api/funds", "", ck, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"last":"2026-11-24"`) || !strings.Contains(w.Body.String(), `"nav":2.985`) {
+		t.Fatalf("funds: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, "GET", "/api/funds/110022/nav", "", ck, ""); w.Code != 200 || !strings.Contains(w.Body.String(), "3.105") {
+		t.Fatalf("nav: %d %s", w.Code, w.Body)
+	}
+	if w := do(h, "DELETE", "/api/funds/watch/110022", "", ck, ""); w.Code != 200 {
+		t.Fatalf("unwatch: %d", w.Code)
+	}
+	if w := do(h, "POST", "/api/jobs/funds", "", ck, ""); w.Code != 400 { // 测试服务器未配置基金数据源
+		t.Fatalf("funds job without source: %d %s", w.Code, w.Body)
+	}
+}

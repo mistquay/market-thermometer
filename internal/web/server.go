@@ -59,6 +59,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/jobs/sync", s.auth(s.startSync))
 	api.HandleFunc("POST /api/jobs/breadth", s.auth(s.startBreadth))
 	api.HandleFunc("GET /api/stocks/stats", s.auth(s.stockStats))
+	api.HandleFunc("GET /api/funds", s.auth(s.funds))
+	api.HandleFunc("GET /api/funds/search", s.auth(s.searchFunds))
+	api.HandleFunc("POST /api/funds/watch", s.auth(s.watchFund))
+	api.HandleFunc("DELETE /api/funds/watch/{code}", s.auth(s.unwatchFund))
+	api.HandleFunc("GET /api/funds/{code}/nav", s.auth(s.fundNAV))
+	api.HandleFunc("POST /api/jobs/funds", s.auth(s.startFunds))
 	api.HandleFunc("GET /api/jobs/current", s.auth(s.currentJob))
 	api.HandleFunc("GET /api/jobs", s.auth(s.recentJobs))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

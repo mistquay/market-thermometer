@@ -19,6 +19,12 @@ type Config struct {
 	BackfillStart string  `yaml:"backfill_start"`
 	Sources       Sources `yaml:"sources"`
 	Stocks        Stocks  `yaml:"stocks"`
+	Funds         Funds   `yaml:"funds"`
+}
+
+// Funds 是场外基金净值数据源配置（只同步自选基金）。
+type Funds struct {
+	Sources []string `yaml:"sources"`
 }
 
 // Stocks 是个股 / 场内基金日线数据源配置。Sources 按顺序回退；为空时不同步（本地已有数据仍可用）。

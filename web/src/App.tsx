@@ -6,6 +6,7 @@ import History from './History'
 import DataPage from './DataPage'
 import Signals from './Signals'
 import Backtest from './Backtest'
+import Funds from './Funds'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -14,6 +15,7 @@ const PAGES = [
   { path: 'history', label: '历史', el: () => <History /> },
   { path: 'signals', label: '信号', el: () => <Signals /> },
   { path: 'backtest', label: '回测', el: () => <Backtest /> },
+  { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
 ]
 
