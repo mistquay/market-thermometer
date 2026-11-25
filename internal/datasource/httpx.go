@@ -2,6 +2,7 @@ package datasource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,9 +63,24 @@ func getOnce(ctx context.Context, c *http.Client, url string, header map[string]
 		return nil, true, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode >= 500 || resp.StatusCode == 429, fmt.Errorf("http %d", resp.StatusCode)
+		retry := (resp.StatusCode >= 500 && resp.StatusCode != http.StatusNotImplemented) || resp.StatusCode == 429
+		return nil, retry, &HTTPError{Status: resp.StatusCode}
 	}
 	return body, false, nil
+}
+
+// HTTPError 是非 200 响应。501（腾讯 WAF 拦截页）不重试。
+type HTTPError struct{ Status int }
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("http %d", e.Status) }
+
+// IsBlocked 判断错误是否像被服务端封禁 / 限流（403、429、501），调用方应停止请求一段时间。
+func IsBlocked(err error) bool {
+	var he *HTTPError
+	if errors.As(err, &he) {
+		return he.Status == 403 || he.Status == 429 || he.Status == 501
+	}
+	return false
 }
 
 // Shanghai 是 A股本地时区。

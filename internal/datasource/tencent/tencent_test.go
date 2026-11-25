@@ -1,8 +1,13 @@
 package tencent
 
 import (
+	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 )
 
 func TestExRightsMult(t *testing.T) {
@@ -45,3 +50,33 @@ func TestParseKlineAndBars(t *testing.T) {
 		t.Fatalf("bars %+v", bars)
 	}
 }
+
+// 被 WAF 拦截（501）后只请求一次，随后熔断、直接失败，不再打到服务端。
+func TestBlockedCircuitBreaker(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNotImplemented)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	client := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+	s := &Source{http: client, now: time.Now}
+	ctx := context.Background()
+	if _, err := s.Bars(ctx, "600000", "2026-01-01", "2026-02-01"); err == nil {
+		t.Fatal("want error")
+	}
+	if _, err := s.Bars(ctx, "600001", "2026-01-01", "2026-02-01"); err == nil {
+		t.Fatal("want fast failure while blocked")
+	}
+	if calls != 1 {
+		t.Fatalf("want exactly 1 request, got %d", calls)
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

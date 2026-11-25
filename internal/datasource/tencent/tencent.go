@@ -5,7 +5,9 @@
 //   - 腾讯的“后复权”序列在非除权日也与不复权涨跌不一致（误差可达 2%），不能用来推算除权乘数；
 //   - 不复权日线在股票除权日带分红送转标注（如 {"cqr":"2025-07-16","FHcontent":"10派4.1元"}），
 //     据此按交易所公式计算除权参考价与乘数；ETF 分红没有标注，乘数按 1 处理（误差约为年分红率）；
-//   - 不提供证券清单（ListStocks 返回 ErrNotSupported），由本地清单或其他数据源提供。
+//   - 不提供证券清单（ListStocks 返回 ErrNotSupported），由本地清单或其他数据源提供；
+//   - 短时间大量请求会被腾讯 WAF 拦截（返回 501 跳转 waf.tencent.com）：插件限速（默认每 400ms 一次），
+//     一旦被拦截即熔断 30 分钟，期间直接返回错误，交给下一个数据源。
 package tencent
 
 import (
@@ -15,6 +17,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -24,13 +27,60 @@ const Name = "tencent"
 
 func init() {
 	ds.RegisterStock(Name, func(env ds.Env) (ds.StockSource, error) {
-		return &Source{http: env.HTTP, now: env.Now}, nil
+		interval := 400 * time.Millisecond
+		if v, ok := env.Options["interval_ms"].(int); ok && v >= 0 {
+			interval = time.Duration(v) * time.Millisecond
+		}
+		return &Source{http: env.HTTP, now: env.Now, interval: interval}, nil
 	})
 }
 
+// blockCooldown：被 WAF 拦截后暂停请求的时长。
+const blockCooldown = 30 * time.Minute
+
 type Source struct {
-	http *http.Client
-	now  func() time.Time
+	http     *http.Client
+	now      func() time.Time
+	interval time.Duration
+
+	mu           sync.Mutex
+	next         time.Time // 下一次允许发请求的时间（限速）
+	blockedUntil time.Time
+}
+
+// get 限速、熔断后发出请求（不重试：被拦截时重试只会延长封禁）。
+func (s *Source) get(ctx context.Context, url string) ([]byte, error) {
+	s.mu.Lock()
+	now := time.Now()
+	if now.Before(s.blockedUntil) {
+		until := s.blockedUntil
+		s.mu.Unlock()
+		return nil, fmt.Errorf("腾讯接口疑似被限流，%s 前暂停请求", until.In(ds.Shanghai).Format("15:04"))
+	}
+	wait := s.next.Sub(now)
+	s.next = maxTime(now, s.next).Add(s.interval)
+	s.mu.Unlock()
+	if wait > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	body, err := ds.GetBodyOnce(ctx, s.http, url, nil)
+	if ds.IsBlocked(err) {
+		s.mu.Lock()
+		s.blockedUntil = time.Now().Add(blockCooldown)
+		s.mu.Unlock()
+	}
+	return body, err
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 func (s *Source) Name() string { return Name }
@@ -55,7 +105,7 @@ func (s *Source) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar
 	}
 	var all []rawBar
 	for end := to; ; {
-		body, err := ds.GetBody(ctx, s.http, fmt.Sprintf(klineURL, prefix+code, from, end, pageSize), nil)
+		body, err := s.get(ctx, fmt.Sprintf(klineURL, prefix+code, from, end, pageSize))
 		if err != nil {
 			return nil, fmt.Errorf("tencent %s: %w", code, err)
 		}

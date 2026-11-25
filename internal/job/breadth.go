@@ -190,9 +190,9 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	r.update(func(s *Status) { s.Total, s.Done, s.Current = len(tasks), 0, "stocks" })
 
 	type result struct {
-		code, src string
-		bars      []ds.StockBar
-		err       error
+		code, kind, src string
+		bars            []ds.StockBar
+		err             error
 	}
 	jobs, results := make(chan task), make(chan result)
 	var wg sync.WaitGroup
@@ -203,7 +203,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 			for t := range jobs {
 				bars, src, err := r.fetchBars(ctx, t.code, t.kind, t.from)
 				select {
-				case results <- result{t.code, src, bars, err}:
+				case results <- result{t.code, t.kind, src, bars, err}:
 				case <-ctx.Done():
 					return
 				}
@@ -234,11 +234,20 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 		return nil
 	}
 	var failed []string
+	failedStocks, stockTasks := 0, 0
+	for _, t := range tasks {
+		if t.kind == ds.KindStock {
+			stockTasks++
+		}
+	}
 	began := r.now()
 	for res := range results {
 		switch {
 		case res.err != nil:
 			failed = append(failed, res.code)
+			if res.kind == ds.KindStock {
+				failedStocks++
+			}
 			if len(failed) <= 5 {
 				r.logf("✗ %s：%v", res.code, res.err)
 			}
@@ -269,11 +278,12 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	}
 	msg := fmt.Sprintf("✓ 个股 / 场内基金日线：写入 %d 行，耗时 %v，来源 %v", rows, r.now().Sub(began).Round(time.Second), bySrc)
 	if len(failed) > 0 {
-		msg += fmt.Sprintf("；%d 只获取失败，下次重试", len(failed))
+		msg += fmt.Sprintf("；%d 只获取失败（股票 %d、基金 %d），下次重试", len(failed), failedStocks, len(failed)-failedStocks)
 	}
 	r.logf("%s", msg)
-	if len(tasks) > 0 && len(failed)*20 > len(tasks) {
-		return fmt.Errorf("%d 只股票获取失败（超过 5%%），请检查数据源后重试", len(failed))
+	// 只按股票判断：股票缺数会让市场广度失真；基金失败只影响基金本身，下次同步重试
+	if stockTasks > 0 && failedStocks*20 > stockTasks {
+		return fmt.Errorf("%d 只股票获取失败（超过 5%%），请检查数据源后重试", failedStocks)
 	}
 	return nil
 }
