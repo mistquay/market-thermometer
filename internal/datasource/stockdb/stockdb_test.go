@@ -52,3 +52,15 @@ func TestClipFinal(t *testing.T) {
 		t.Fatalf("intraday bar should be dropped: %v", b)
 	}
 }
+
+func TestLatestName(t *testing.T) {
+	rows := []json.RawMessage{
+		json.RawMessage(`{"date":20261120,"name":"旧名"}`),
+		json.RawMessage(`{"date":20261124,"name":"浦发银行"}`),
+		json.RawMessage(`null`),
+		json.RawMessage(`{"date":20261123,"name":"中间"}`),
+	}
+	if got := latestName(rows); got != "浦发银行" {
+		t.Fatalf("latestName = %q", got)
+	}
+}

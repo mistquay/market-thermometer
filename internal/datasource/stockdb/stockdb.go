@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -45,6 +46,18 @@ type Source struct {
 	base string
 	http *http.Client
 	now  func() time.Time
+
+	mu    sync.Mutex
+	names map[string]string // 拉取日线时顺带记下的最新证券名称（日 K 每行带 name）
+}
+
+// TakeNames 返回并清空自上次调用以来拉取日线时记下的证券名称（实现 ds.NameCollector）。
+func (s *Source) TakeNames() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.names
+	s.names = nil
+	return out
 }
 
 func (s *Source) Name() string { return Name }
@@ -131,6 +144,14 @@ func (s *Source) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar
 	if err != nil {
 		return nil, fmt.Errorf("stockdb %s: %w", code, err)
 	}
+	if name := latestName(rows); name != "" {
+		s.mu.Lock()
+		if s.names == nil {
+			s.names = map[string]string{}
+		}
+		s.names[code] = name
+		s.mu.Unlock()
+	}
 	return clipFinal(bars, s.now()), nil
 }
 
@@ -178,6 +199,22 @@ func parseBars(rows []json.RawMessage, adj [][2]json.RawMessage) ([]ds.StockBar,
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
 	return out, nil
+}
+
+// latestName 返回日 K 中日期最新一行的证券名称。
+func latestName(rows []json.RawMessage) string {
+	var best json.Number
+	name := ""
+	for _, raw := range rows {
+		var r struct {
+			Date json.Number `json:"date"`
+			Name string      `json:"name"`
+		}
+		if json.Unmarshal(raw, &r) == nil && r.Name != "" && r.Date.String() > best.String() {
+			best, name = r.Date, r.Name
+		}
+	}
+	return name
 }
 
 func fmtDate(s string) (string, bool) {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	ds "market-thermometer/internal/datasource"
 )
 
 const (
@@ -71,4 +73,21 @@ func (r *Runner) StartNames() (*Status, error) {
 		r.finish(id, state, detail)
 	}()
 	return r.Current(), nil
+}
+
+// collectNames 保存个股数据源在拉取日线时顺带记下的证券名称（如 stockdb 日 K 每行带名称，离线、无需额外请求）。
+func (r *Runner) collectNames(ctx context.Context) {
+	for _, s := range append(append([]ds.StockSource{}, r.stocks...), r.funds...) {
+		nc, ok := s.(ds.NameCollector)
+		if !ok {
+			continue
+		}
+		if names := nc.TakeNames(); len(names) > 0 {
+			if err := r.store.SaveNames(ctx, names, r.now()); err != nil {
+				r.logf("✗ 保存证券名称：%v", err)
+				continue
+			}
+			r.logf("✓ 证券名称：从 %s 更新 %d 只", s.Name(), len(names))
+		}
+	}
 }

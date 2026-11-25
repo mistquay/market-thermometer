@@ -19,9 +19,10 @@ const (
 	namePagesPerCall = 30
 )
 
+// 场内基金在前：股票名称通常已由 stockdb 在同步日线时顺带提供，基金名称只能从这里取。
 var nameLists = []string{
-	"m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",                       // 沪深 A 股
 	"b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0404,b:MK0405,b:MK0406,b:MK0407", // 场内 ETF、LOF
+	"m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048",                       // 沪深 A 股
 }
 
 // SecurityNames 从游标处（"列表序号:页码"，空为从头）开始取名称，最多 namePagesPerCall 页。

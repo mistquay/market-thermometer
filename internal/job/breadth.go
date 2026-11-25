@@ -289,6 +289,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	if err := flush(); err != nil {
 		return err
 	}
+	r.collectNames(context.WithoutCancel(ctx))
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("已中断（已同步的部分保留，下次继续）：%w", err)
 	}

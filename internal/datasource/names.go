@@ -11,6 +11,11 @@ type NameSource interface {
 	SecurityNames(ctx context.Context, cursor string) (names map[string]string, next string, err error)
 }
 
+// NameCollector 是个股数据源的可选能力：拉取日线时顺带记下证券名称，同步结束后由核心取走保存。
+type NameCollector interface {
+	TakeNames() map[string]string
+}
+
 // NameSources 返回已启用数据源中实现了 NameSource 的。
 func (h *Hub) NameSources() []NameSource {
 	var out []NameSource
