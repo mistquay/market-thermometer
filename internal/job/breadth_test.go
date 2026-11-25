@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/derived/ma200"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/store"
 )
@@ -82,10 +83,10 @@ func TestBreadthSyncIncrementalAndOffline(t *testing.T) {
 	if err := r.syncStocks(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.computeBreadth(ctx, false); err != nil {
+	if err := r.computeDerived(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	full, err := st.Series(ctx, ds.CNBreadthMA200, breadthSource, "", "")
+	full, err := st.Series(ctx, ds.CNBreadthMA200, ma200.Source, "", "")
 	if err != nil || len(full) == 0 {
 		t.Fatalf("no breadth: %v %v", full, err)
 	}
@@ -95,20 +96,20 @@ func TestBreadthSyncIncrementalAndOffline(t *testing.T) {
 	if err := r.syncStocks(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.computeBreadth(ctx, false); err != nil {
+	if err := r.computeDerived(ctx, false); err != nil {
 		t.Fatal(err)
 	}
 	if src.calls["600087"] != 1 {
 		t.Fatalf("delisted stock with local data should not be refetched, calls=%d", src.calls["600087"])
 	}
-	inc, _ := st.Series(ctx, ds.CNBreadthMA200, breadthSource, "", "")
+	inc, _ := st.Series(ctx, ds.CNBreadthMA200, ma200.Source, "", "")
 
 	// 数据源下线：只用本地日线全量重算，结果与增量一致
 	src.down = true
-	if err := r.computeBreadth(ctx, true); err != nil {
+	if err := r.computeDerived(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	offline, _ := st.Series(ctx, ds.CNBreadthMA200, breadthSource, "", "")
+	offline, _ := st.Series(ctx, ds.CNBreadthMA200, ma200.Source, "", "")
 	if fmt.Sprint(inc) != fmt.Sprint(offline) || len(offline) <= len(full) {
 		t.Fatalf("incremental (%d pts) and offline full recompute (%d pts) differ", len(inc), len(offline))
 	}

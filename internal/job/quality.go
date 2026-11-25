@@ -348,7 +348,7 @@ func (r *Runner) StartGapFill(source string, codes []string) (*Status, error) {
 		state, detail := "done", "补缺口完成"
 		n, err := r.gapFill(ctx, src, codes)
 		if err == nil && n > 0 {
-			err = r.computeBreadth(ctx, true)
+			err = r.computeDerived(ctx, true)
 		}
 		if err != nil {
 			state, detail = "failed", err.Error()

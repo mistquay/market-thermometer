@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -88,7 +89,7 @@ func builtinState(m plugin.Manifest, hub *ds.Hub, stocks, funds, fundNAV []strin
 		if len(uses) == 0 {
 			return false, "未启用（config.yaml 的 stocks.sources）"
 		}
-		return true, fmt.Sprintf("已启用：%v", uses)
+		return true, "已启用：" + strings.Join(uses, "、")
 	case plugin.KindFund:
 		if slices.Contains(fundNAV, m.Name) {
 			return true, "已启用"

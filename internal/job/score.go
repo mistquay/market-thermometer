@@ -9,6 +9,7 @@ import (
 	"market-thermometer/internal/engine"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/store"
+	"market-thermometer/internal/strategy"
 )
 
 // ScoreResult 是一次重算的摘要。
@@ -23,9 +24,19 @@ type ScoreResult struct {
 
 // LoadDays 读取该市场各角色的原始数据，按参数 p 计算全部交易日得分（只读，不写库）。
 func LoadDays(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Market, p engine.Params) ([]engine.Day, map[market.Role]string, error) {
+	res, sources, err := Run(ctx, st, hub, mkt, p)
+	return res.Days, sources, err
+}
+
+// Run 读取该市场各角色的原始数据，用当前策略插件计算得分、状态与事件（只读，不写库）。
+func Run(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Market, p engine.Params) (strategy.Result, map[market.Role]string, error) {
+	strat, err := strategy.Get(strategy.Default)
+	if err != nil {
+		return strategy.Result{}, nil, err
+	}
 	cov, err := st.Coverage(ctx)
 	if err != nil {
-		return nil, nil, err
+		return strategy.Result{}, nil, err
 	}
 	have := map[ds.MetricID]map[string]bool{}
 	for _, c := range cov {
@@ -40,13 +51,13 @@ func LoadDays(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Mark
 		src := pickSource(hub.Route(metric), have[metric])
 		if src == "" {
 			if role == market.RoleClose {
-				return nil, nil, fmt.Errorf("缺少标的收盘价 %s，无法建立交易日历", metric)
+				return strategy.Result{}, nil, fmt.Errorf("缺少标的收盘价 %s，无法建立交易日历", metric)
 			}
 			continue // 缺维度由引擎按降级处理
 		}
 		pts, err := st.Series(ctx, metric, src, "", "")
 		if err != nil {
-			return nil, nil, err
+			return strategy.Result{}, nil, err
 		}
 		raw[role] = pts
 		sources[role] = src
@@ -54,7 +65,7 @@ func LoadDays(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Mark
 	if _, ok := raw[market.RoleBreadth]; !ok {
 		p.Weights[2] = 0 // 完全没有广度数据（未配置个股数据源）：视为不启用，而不是每天都降级
 	}
-	return engine.Compute(engine.Align(raw, p.MaxFillDays), p), sources, nil
+	return strat.Run(engine.Align(raw, p.MaxFillDays), p), sources, nil
 }
 
 // Score 按生效参数重算该市场全部得分、状态机与事件并写库（全量重算，幂等）。
@@ -63,12 +74,12 @@ func Score(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Market,
 	if err != nil {
 		return nil, err
 	}
-	days, sources, err := LoadDays(ctx, st, hub, mkt, p)
+	out, sources, err := Run(ctx, st, hub, mkt, p)
 	if err != nil {
 		return nil, err
 	}
+	days, states, events := out.Days, out.States, out.Events
 	res := &ScoreResult{Version: p.Version(), Sources: sources}
-	states, events := engine.RunSignals(days, p.Signal)
 	if err := st.ReplaceScores(ctx, mkt.ID, res.Version, days); err != nil {
 		return nil, err
 	}

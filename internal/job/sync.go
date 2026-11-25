@@ -61,7 +61,9 @@ func (r *Runner) SourceNames() (stocks, funds, fundNAV []string) {
 		stocks = append(stocks, s.Name())
 	}
 	for _, s := range r.chain(ds.KindFund) {
-		funds = append(funds, s.Name())
+		if !r.skipFunds {
+			funds = append(funds, s.Name())
+		}
 	}
 	for _, s := range r.fundNAV {
 		fundNAV = append(fundNAV, s.Name())
@@ -177,7 +179,7 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 			r.logf("未配置个股数据源，跳过个股日线同步，广度只用本地已有数据")
 		}
 		if err == nil {
-			err = r.computeBreadth(ctx, true) // 近期日线可能被修正，从本地全量重算
+			err = r.computeDerived(ctx, true) // 近期日线可能被修正，从本地全量重算
 		}
 		if err != nil {
 			r.logf("✗ 市场广度：%v", err)

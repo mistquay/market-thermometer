@@ -98,7 +98,10 @@ function PluginCard({ p, test, onTest, onSaved }: { p: PluginInfo; test?: TestRe
           {p.metrics.map((m) => <span key={m.id} className="chip" title={m.id}>{m.name || m.id}</span>)}
         </div>
       )}
-      {!editing && (p.config ?? []).length > 0 && (
+      {p.kind === 'notifier' && (p.config ?? []).length > 0 && (
+        <div className="muted small">渠道字段：{(p.config ?? []).map((f) => f.label).join('、')}（在设置页按渠道填写）</div>
+      )}
+      {!editing && p.kind !== 'notifier' && (p.config ?? []).length > 0 && (
         <div className="plugin-values small">
           {(p.config ?? []).map((f) => (
             <span key={f.key}><span className="muted">{f.label}：</span><span className="mono">{p.values[f.key] || '（默认）'}</span></span>

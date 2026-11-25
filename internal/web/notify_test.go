@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	_ "market-thermometer/internal/notify/dingtalk"
+	_ "market-thermometer/internal/strategy/thermometer"
 )
 
 func TestNotifyChannelsAPI(t *testing.T) {

@@ -43,6 +43,7 @@
 
 - 已完成：M5 推送（`internal/notify` 四个渠道 + `job.Pusher` + 设置页）、调度（`job.Scheduler`，`mt serve -schedule=false` 可关）、数据质量页（`internal/quality` + 质量页）、回测稳健性（`backtest.Perturb` / `Years` + 回测页面板）、部署文档 `docs/deploy.md`。
 - 场内基金只回填了 364 / 2,192 只，用户决定暂不回填（后续自己写脚本用不同 IP 获取后导入），本地 `skip_funds: true`；服务器不同步个股（deploy.md §6 方案 A）。
+- P2 插件化（2026-11-25）已完成，见 roadmap §5。下一步是 P3 投研：组合分析 → 行情图 → 财务数据。
 - 下面是原始任务清单，保留作参考。
 
 ### 未完成事项（P1 收尾，按顺序做）

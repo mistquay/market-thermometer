@@ -2,7 +2,6 @@ package job
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,19 +9,16 @@ import (
 	"sync"
 	"time"
 
-	"market-thermometer/internal/breadth"
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/derived"
 )
 
 const (
-	breadthMA        = 200          // 均线周期
-	stockFetchFrom   = "2008-06-01" // 个股日线最晚起点：保证 2010 年初已有 200 根（backfill_start 更早则用它）
-	breadthCountFrom = "2010-01-01" // 广度序列起点
-	stockBatch       = 100          // 同步时每多少只股票提交一次
+	stockFetchFrom = "2008-06-01" // 个股日线最晚起点：保证 2010 年初已有 200 根（backfill_start 更早则用它）
+	stockBatch     = 100          // 同步时每多少只股票提交一次
 	// stockRevisitDays：每次同步往回重拉的自然日数（约 10 个交易日），覆盖本地已有数据。
 	// 数据源当日先发布临时数据、事后校对（stockdb 盘后 15:00 更新、24:00 校对入库），不重拉会把临时值永久留在本地。
 	stockRevisitDays = 15
-	breadthSource    = "local" // 广度由本地个股日线派生
 )
 
 // ErrNoStockSource 表示未配置个股数据源。
@@ -123,7 +119,7 @@ func (r *Runner) runBreadthJob(ctx context.Context, id int64, full bool) {
 	state, detail := "done", "个股日线同步、市场广度计算完成"
 	err := r.syncStocks(ctx)
 	if err == nil {
-		err = r.computeBreadth(ctx, true) // 近期日线可能被修正，总是从本地全量重算（约 20 秒）
+		err = r.computeDerived(ctx, true) // 近期日线可能被修正，总是从本地全量重算（约 20 秒）
 	}
 	if err != nil {
 		state, detail = "failed", err.Error()
@@ -298,84 +294,32 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	return nil
 }
 
-// computeBreadth 只读本地个股日线，增量（或全量）更新广度状态与日计数，并重写 cn.breadth.ma200 序列。
-func (r *Runner) computeBreadth(ctx context.Context, full bool) error {
-	if full {
-		if err := r.store.ResetBreadth(ctx); err != nil {
-			return err
-		}
-	}
-	local, err := r.store.StockList(ctx)
+// RunDerivedLocal 只从本地数据全量重算派生指标并打分（不请求任何数据源，供 CLI 使用）。
+func (r *Runner) RunDerivedLocal(ctx context.Context) (*Status, error) {
+	id, err := r.begin("derived")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	raw, err := r.store.BreadthStates(ctx)
-	if err != nil {
-		return err
+	state, detail := "done", "派生指标重算完成"
+	if err := r.computeDerived(ctx, true); err != nil {
+		state, detail = "failed", err.Error()
+		r.logf("✗ %v", err)
+	} else {
+		r.score(ctx, &state, &detail)
 	}
-	type task struct {
-		code string
-		st   breadth.State
-	}
-	var tasks []task
-	for _, s := range local {
-		var st breadth.State
-		if js, ok := raw[s.Code]; ok {
-			if err := json.Unmarshal([]byte(js), &st); err != nil {
-				return fmt.Errorf("%s 广度状态损坏，请全量重算：%w", s.Code, err)
-			}
-		}
-		if s.Kind == ds.KindStock && s.LastDate != "" && st.LastDate < s.LastDate { // 广度只统计 A 股
-			tasks = append(tasks, task{s.Code, st})
-		}
-	}
-	r.update(func(s *Status) { s.Total, s.Done, s.Current = len(tasks), 0, "breadth" })
-	began := r.now()
-	states, counts := map[string]string{}, breadth.Counts{}
-	flush := func() error {
-		if len(states) == 0 {
-			return nil
-		}
-		err := r.store.SaveBreadth(context.WithoutCancel(ctx), states, counts)
-		states, counts = map[string]string{}, breadth.Counts{}
-		return err
-	}
-	for i, t := range tasks {
-		if err := ctx.Err(); err != nil {
-			_ = flush()
-			return fmt.Errorf("已中断：%w", err)
-		}
-		bars, err := r.store.StockBars(ctx, t.code, t.st.LastDate)
-		if err != nil {
-			return err
-		}
-		st := breadth.Feed(t.st, bars, breadthMA, breadthCountFrom, counts)
-		b, _ := json.Marshal(st)
-		states[t.code] = string(b)
-		if (i+1)%500 == 0 {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		r.update(func(s *Status) { s.Done++ })
-	}
-	if err := flush(); err != nil {
-		return err
-	}
+	r.finish(id, state, detail)
+	return r.Current(), nil
+}
 
-	dates, all, err := r.store.BreadthCounts(ctx)
-	if err != nil {
-		return err
+// computeDerived 依次运行全部派生指标（如市场广度），只读本地数据。full=true 时全量重算。
+func (r *Runner) computeDerived(ctx context.Context, full bool) error {
+	for _, d := range derived.All() {
+		env := derived.Env{Store: r.store, Now: r.now, Logf: r.logf, Progress: func(done, total int) {
+			r.update(func(s *Status) { s.Total, s.Done, s.Current = total, done, d.Name() })
+		}}
+		if err := d.Compute(ctx, env, full); err != nil {
+			return fmt.Errorf("%s：%w", d.Name(), err)
+		}
 	}
-	pts := breadth.Percent(dates, all)
-	if _, err := r.store.UpsertPoints(ctx, ds.CNBreadthMA200, breadthSource, pts, r.now()); err != nil {
-		return err
-	}
-	rangeText := "无数据"
-	if n := len(pts); n > 0 {
-		last := all[pts[n-1].Date]
-		rangeText = fmt.Sprintf("%s ~ %s，最新 %.1f%%（%d / %d）", pts[0].Date, pts[n-1].Date, pts[n-1].Value, last.Above, last.Total)
-	}
-	r.logf("✓ 市场广度：更新 %d 只股票，共 %d 个交易日（%s），耗时 %v", len(tasks), len(pts), rangeText, r.now().Sub(began).Round(time.Second))
 	return nil
 }

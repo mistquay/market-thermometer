@@ -32,6 +32,7 @@ import (
 	_ "market-thermometer/internal/datasource/eastmoney"
 	_ "market-thermometer/internal/datasource/stockdb"
 	_ "market-thermometer/internal/datasource/tencent"
+	_ "market-thermometer/internal/derived/ma200"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/notify"
@@ -42,6 +43,7 @@ import (
 	"market-thermometer/internal/plugin"
 	"market-thermometer/internal/plugin/ext"
 	"market-thermometer/internal/store"
+	_ "market-thermometer/internal/strategy/thermometer"
 	"market-thermometer/internal/web"
 	"market-thermometer/internal/webui"
 )
@@ -281,6 +283,7 @@ func cmdSync(args []string) error {
 func cmdBreadth(args []string) error {
 	fs := flag.NewFlagSet("breadth", flag.ExitOnError)
 	full := fs.Bool("full", false, "清空后从头回填")
+	local := fs.Bool("local", false, "不同步个股日线，只从本地数据重算派生指标（市场广度）")
 	a, err := setup(fs, args)
 	if err != nil {
 		return err
@@ -307,7 +310,11 @@ func cmdBreadth(args []string) error {
 			}
 		}
 	}()
-	st, err := a.runner.RunBreadth(ctx, *full)
+	run := func() (*job.Status, error) { return a.runner.RunBreadth(ctx, *full) }
+	if *local {
+		run = func() (*job.Status, error) { return a.runner.RunDerivedLocal(ctx) }
+	}
+	st, err := run()
 	close(done)
 	if err != nil {
 		return err
