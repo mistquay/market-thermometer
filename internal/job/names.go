@@ -7,15 +7,23 @@ import (
 	"time"
 )
 
-// SettingNamesAt：最近一次更新证券名称的时间（RFC3339）。
-const SettingNamesAt = "names.updated_at"
+const (
+	// SettingNamesAt：最近一次完整取到证券名称的时间（RFC3339）。
+	SettingNamesAt = "names.updated_at"
+	// SettingNamesCursor：名称列表分批拉取的游标（未取完时下次从这里继续）。
+	SettingNamesCursor = "names.cursor"
+	// namesMaxAge：证券名称完整取到后，过这么久才再刷新（名称变化很少）。
+	namesMaxAge = 7 * 24 * time.Hour
+)
 
-// namesMaxAge：证券名称超过这么久就在每日同步时刷新一次（名称变化很少）。
-const namesMaxAge = 7 * 24 * time.Hour
-
-// refreshNames 从第一个能提供名称的数据源更新证券名称；force=false 时只在过期后更新。
+// refreshNames 分批更新证券名称：每次调用取一批（受数据源限流约束），保存已取到的部分与游标，
+// 全部取完后记录时间。force=true 时忽略“最近已更新”的判断。
 func (r *Runner) refreshNames(ctx context.Context, force bool) error {
-	if !force {
+	cursor, err := r.store.Setting(ctx, SettingNamesCursor)
+	if err != nil {
+		return err
+	}
+	if !force && cursor == "" {
 		at, err := r.store.Setting(ctx, SettingNamesAt)
 		if err != nil {
 			return err
@@ -24,26 +32,31 @@ func (r *Runner) refreshNames(ctx context.Context, force bool) error {
 			return nil
 		}
 	}
-	var errs []error
-	for _, ns := range r.hub.NameSources() {
-		names, err := ns.SecurityNames(ctx)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
+	sources := r.hub.NameSources()
+	if len(sources) == 0 {
+		return errors.New("没有能提供证券名称的数据源（需启用 eastmoney）")
+	}
+	names, next, ferr := sources[0].SecurityNames(ctx, cursor)
+	if len(names) > 0 {
 		if err := r.store.SaveNames(ctx, names, r.now()); err != nil {
 			return err
 		}
-		r.logf("✓ 证券名称：%d 只", len(names))
-		return r.store.SetSetting(ctx, SettingNamesAt, r.now().UTC().Format(time.RFC3339))
 	}
-	if len(errs) == 0 {
-		return errors.New("没有能提供证券名称的数据源（需启用 eastmoney）")
+	if err := r.store.SetSetting(ctx, SettingNamesCursor, next); err != nil {
+		return err
 	}
-	return errors.Join(errs...)
+	switch {
+	case ferr != nil:
+		return fmt.Errorf("本次取到 %d 条，下次从 %s 继续：%w", len(names), next, ferr)
+	case next != "":
+		r.logf("证券名称：本次取到 %d 条，未取完，下次同步从 %s 继续", len(names), next)
+		return nil
+	}
+	r.logf("✓ 证券名称已全部更新（本次 %d 条）", len(names))
+	return r.store.SetSetting(ctx, SettingNamesAt, r.now().UTC().Format(time.RFC3339))
 }
 
-// StartNames 在后台立即更新证券名称。
+// StartNames 在后台立即取一批证券名称。
 func (r *Runner) StartNames() (*Status, error) {
 	id, err := r.begin("names")
 	if err != nil {
