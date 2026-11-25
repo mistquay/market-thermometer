@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"strconv"
@@ -318,4 +319,99 @@ func (r *Runner) sampleStocks(ctx context.Context, now time.Time) ([]string, err
 	rnd := rand.New(rand.NewPCG(seed, seed))
 	rnd.Shuffle(len(codes), func(i, j int) { codes[i], codes[j] = codes[j], codes[i] })
 	return append([]string{"600000"}, codes[:min(len(codes), crossSample)]...), nil
+}
+
+// ---- 补缺口（后台任务，会请求数据源）----
+
+// StartGapFill 用指定数据源补齐这些股票在本地首尾日期之间缺失的交易日（已有数据不覆盖）。
+// 缺口期间有除权（乘数 ≠ 1）的股票跳过：本地缺口后一日的乘数可能已包含该次除权，补进来会重复计算。
+// 完成后全量重算市场广度与得分。
+func (r *Runner) StartGapFill(source string, codes []string) (*Status, error) {
+	var src ds.StockSource
+	for _, s := range r.stocks {
+		if s.Name() == source {
+			src = s
+		}
+	}
+	if src == nil {
+		return nil, fmt.Errorf("数据源 %q 未配置为个股数据源", source)
+	}
+	if len(codes) == 0 {
+		return nil, errors.New("没有要修补的股票")
+	}
+	id, err := r.begin("gapfill")
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		ctx := context.Background()
+		state, detail := "done", "补缺口完成"
+		n, err := r.gapFill(ctx, src, codes)
+		if err == nil && n > 0 {
+			err = r.computeBreadth(ctx, true)
+		}
+		if err != nil {
+			state, detail = "failed", err.Error()
+			r.logf("✗ %v", err)
+		} else if n > 0 {
+			r.score(ctx, &state, &detail)
+		}
+		r.finish(id, state, detail)
+	}()
+	return r.Current(), nil
+}
+
+func (r *Runner) gapFill(ctx context.Context, src ds.StockSource, codes []string) (int, error) {
+	from := r.now().AddDate(0, 0, -qualityWindowDays).Format("2006-01-02")
+	r.update(func(s *Status) { s.Total, s.Done, s.Current = len(codes), 0, "gapfill" })
+	r.logf("补缺口：%d 只股票，来源 %s，%s 起，只插入本地缺失的交易日", len(codes), src.Name(), from)
+	total, fails := 0, 0
+	for _, code := range codes {
+		r.update(func(s *Status) { s.Done++ })
+		local, err := r.store.StockBars(ctx, code, "")
+		if err != nil {
+			return total, err
+		}
+		if len(local) < 2 {
+			continue
+		}
+		sb, err := src.Bars(ctx, code, from, "")
+		if err != nil {
+			fails++
+			r.logf("✗ %s：%v", code, err)
+			if fails >= crossMaxErrors {
+				return total, fmt.Errorf("%s 连续 %d 次失败，停止（已补的保留）", src.Name(), fails)
+			}
+			continue
+		}
+		fails = 0
+		have := make(map[string]bool, len(local))
+		for _, b := range local {
+			have[b.Date] = true
+		}
+		first, last := local[0].Date, local[len(local)-1].Date
+		var add []ds.StockBar
+		exRight := false
+		for _, b := range sb {
+			if !have[b.Date] && b.Date > first && b.Date < last {
+				add = append(add, b)
+				exRight = exRight || math.Abs(b.Mult-1) > quality.Tolerance
+			}
+		}
+		switch {
+		case len(add) == 0:
+			r.logf("%s：没有可补的日期（来源同样缺失，可能是停牌）", code)
+		case exRight:
+			r.logf("%s：缺口期间有除权，跳过（需人工处理）", code)
+		default:
+			n, err := r.store.InsertMissingBars(ctx, code, src.Name(), add)
+			if err != nil {
+				return total, err
+			}
+			total += n
+			r.logf("✓ %s：补入 %d 个交易日（%s ~ %s）", code, n, add[0].Date, add[len(add)-1].Date)
+		}
+	}
+	r.logf("补缺口：共补入 %d 根日线", total)
+	return total, nil
 }

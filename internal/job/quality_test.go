@@ -127,6 +127,28 @@ func TestQualityAndCrossCheck(t *testing.T) {
 	if res.Diffs[0].Src != "a" {
 		t.Fatalf("diff src: %+v", res.Diffs[0])
 	}
+
+	// 补缺口：用来源 a 补齐 600000 的 6 个交易日；已有数据不覆盖（000001 的收盘价不变）
+	n, err := r.gapFill(ctx, a, []string{"600000", "000001"})
+	if err != nil || n != 6 {
+		t.Fatalf("gapfill: %d %v", n, err)
+	}
+	if rep, _ := Quality(ctx, st, hub, market.CN, now); rep.GapStocks != 0 {
+		t.Fatalf("gaps after fill: %+v", rep.Gaps)
+	}
+	if lb, _ := st.StockBars(ctx, "000001", ""); lb[len(lb)-1].Close != full(none, 0)[len(cal)-1].Close {
+		t.Fatal("existing bar overwritten")
+	}
+	// 缺口期间有除权：跳过
+	if err := st.SaveStockBars(ctx, "stockdb", map[string][]ds.StockBar{"600001": full(gap, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	ex := full(none, 0)
+	ex[4].Mult = 1.1
+	a.bars["600001"] = ex
+	if n, err := r.gapFill(ctx, a, []string{"600001"}); err != nil || n != 0 {
+		t.Fatalf("ex-right gap filled: %d %v", n, err)
+	}
 }
 
 // orderStocks 记录 Bars 的调用顺序。

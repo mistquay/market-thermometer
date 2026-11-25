@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/jobs/funds", s.auth(s.startFunds))
 	api.HandleFunc("GET /api/quality", s.auth(s.quality))
 	api.HandleFunc("POST /api/jobs/crosscheck", s.auth(s.startCrossCheck))
+	api.HandleFunc("POST /api/jobs/gapfill", s.auth(s.startGapFill))
 	api.HandleFunc("GET /api/notify", s.auth(s.notifyState))
 	api.HandleFunc("POST /api/notify/settings", s.auth(s.saveNotifySettings))
 	api.HandleFunc("POST /api/notify/channels", s.auth(s.saveChannel))

@@ -4,6 +4,7 @@
 //	mt sync   [-c config.yaml] [-full]   命令行同步数据（调试/运维用）
 //	mt breadth [-c config.yaml] [-full]  计算市场广度（-full 清空后从头回填）
 //	mt score  [-c config.yaml]           按生效参数重算全部得分
+//	mt gapfill [-c config.yaml] -source tencent 代码…  用数据源补齐个股日线缺口（不覆盖已有数据）
 //	mt hashpw                            从标准输入读口令，输出 bcrypt 哈希，填入 config.yaml
 package main
 
@@ -55,6 +56,8 @@ func main() {
 		err = cmdSync(os.Args[2:])
 	case "breadth":
 		err = cmdBreadth(os.Args[2:])
+	case "gapfill":
+		err = cmdGapFill(os.Args[2:])
 	case "score":
 		err = cmdScore(os.Args[2:])
 	case "hashpw":
@@ -68,7 +71,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|hashpw [-c config.yaml]")
 	os.Exit(2)
 }
 
@@ -278,6 +281,33 @@ func cmdBreadth(args []string) error {
 		return fmt.Errorf("结束状态：%s", st.State)
 	}
 	return nil
+}
+
+func cmdGapFill(args []string) error {
+	fs := flag.NewFlagSet("gapfill", flag.ExitOnError)
+	source := fs.String("source", "tencent", "用于补缺口的个股数据源（须在 stocks.sources 中）")
+	a, err := setup(fs, args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	if _, err := a.runner.StartGapFill(*source, fs.Args()); err != nil {
+		return err
+	}
+	printed := 0
+	for {
+		time.Sleep(time.Second)
+		st := a.runner.Current()
+		for ; printed < len(st.Log); printed++ {
+			fmt.Println(st.Log[printed])
+		}
+		if st.State != "running" {
+			if st.State != "done" {
+				return fmt.Errorf("结束状态：%s", st.State)
+			}
+			return nil
+		}
+	}
 }
 
 func cmdScore(args []string) error {

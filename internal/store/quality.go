@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+
+	ds "market-thermometer/internal/datasource"
 )
 
 // ---- 数据质量：只读查询 ----
@@ -77,4 +79,28 @@ func (s *Store) LoadJSON(ctx context.Context, key string, v any) (bool, error) {
 		return false, errors.Join(errors.New(key+" 损坏"), err)
 	}
 	return true, nil
+}
+
+// InsertMissingBars 只插入本地还没有的日线（已有的日期不覆盖），返回插入条数。用于补缺口。
+func (s *Store) InsertMissingBars(ctx context.Context, code, source string, bars []ds.StockBar) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	st, err := tx.PrepareContext(ctx, `INSERT INTO stock_bar(code,d,close,mult,source) VALUES(?,?,?,?,?) ON CONFLICT(code,d) DO NOTHING`)
+	if err != nil {
+		return 0, err
+	}
+	defer st.Close()
+	n := 0
+	for _, b := range bars {
+		r, err := st.ExecContext(ctx, code, dateInt(b.Date), b.Close, b.Mult, source)
+		if err != nil {
+			return 0, err
+		}
+		k, _ := r.RowsAffected()
+		n += int(k)
+	}
+	return n, tx.Commit()
 }

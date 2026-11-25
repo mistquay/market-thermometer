@@ -34,15 +34,21 @@ export default function Quality() {
     return () => clearInterval(t)
   }, [running, load])
 
-  const check = (codes: string[] = []) =>
+  const start = (f: () => Promise<JobStatus>) =>
     (async () => {
       setError('')
       try {
-        setJob(await api.startCrossCheck(codes))
+        setJob(await f())
       } catch (e) {
         setError(e instanceof ApiError ? e.message : String(e))
       }
     })()
+
+  const check = (codes: string[] = []) => start(() => api.startCrossCheck(codes))
+  const fill = (source: string, codes: string[]) => {
+    if (confirm(`用 ${source} 补齐 ${codes.length} 只股票在本地缺失的交易日？已有数据不会被覆盖，完成后重算市场广度。`)) start(() => api.startGapFill(source, codes))
+  }
+  const missingCodes = (source: string) => [...new Set((cc?.diffs ?? []).filter((d) => d.src === source && d.kind === 'only_source').map((d) => d.code))]
 
   const lowDays = rep?.coverage?.filter((c) => c.low) ?? []
   const cov = rep?.coverage ?? []
@@ -176,7 +182,14 @@ export default function Quality() {
                         <td className={`num mono ${s.onlySource ? 'bad-text' : ''}`}>{s.onlySource}</td>
                         <td className="num mono">{s.onlyLocal}</td>
                         <td className="num mono muted">{s.recent}</td>
-                        <td className="muted small">{s.skipped || (s.errors?.length ? `${s.errors.length} 只失败：${s.errors[0]}` : '')}</td>
+                        <td className="muted small">
+                          {s.skipped || (s.errors?.length ? `${s.errors.length} 只失败：${s.errors[0]}` : '')}
+                          {missingCodes(s.source).length > 0 && (
+                            <button className="btn btn-ghost" disabled={running} onClick={() => fill(s.source, missingCodes(s.source))}>
+                              用 {s.source} 补齐本地缺失（{missingCodes(s.source).length} 只）
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

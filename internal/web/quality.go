@@ -19,6 +19,33 @@ func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rep)
 }
 
+// startGapFill 用指定数据源补齐这些股票的缺口（通常来自交叉核对中“本地缺、来源有”的差异）。
+func (s *Server) startGapFill(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string   `json:"source"`
+		Codes  []string `json:"codes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Codes) == 0 || len(req.Codes) > 50 {
+		writeErr(w, http.StatusBadRequest, "须提供 1–50 只股票")
+		return
+	}
+	for _, c := range req.Codes {
+		if !reFundCode.MatchString(c) {
+			writeErr(w, http.StatusBadRequest, "证券代码应为 6 位数字")
+			return
+		}
+	}
+	st, err := s.runner.StartGapFill(req.Source, req.Codes)
+	switch {
+	case errors.Is(err, job.ErrBusy):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		writeJSON(w, http.StatusAccepted, st)
+	}
+}
+
 // startCrossCheck 启动交叉核对；codes 为空时随机抽样。
 func (s *Server) startCrossCheck(w http.ResponseWriter, r *http.Request) {
 	var req struct {

@@ -25,7 +25,7 @@ export type Series = { metric: string; source: string; points: Point[] }
 
 export type JobStatus = {
   id: number
-  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck'
+  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck' | 'gapfill'
   state: 'running' | 'done' | 'failed' | 'partial'
   total: number
   done: number
@@ -235,6 +235,7 @@ export const api = {
   jobs: () => request<JobRun[]>('GET', '/api/jobs'),
   quality: () => request<QualityReport>('GET', '/api/quality'),
   startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
+  startGapFill: (source: string, codes: string[]) => request<JobStatus>('POST', '/api/jobs/gapfill', { source, codes }),
   notify: () => request<NotifyState>('GET', '/api/notify'),
   saveNotifySettings: (body: { signals?: boolean; weekly?: boolean }) => request<NotifyState>('POST', '/api/notify/settings', body),
   saveChannel: (id: number, c: ChannelInput) =>
