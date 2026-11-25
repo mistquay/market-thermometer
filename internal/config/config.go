@@ -21,11 +21,26 @@ type Config struct {
 	Stocks        Stocks  `yaml:"stocks"`
 }
 
-// Stocks 是个股数据源配置（用于市场广度）。Source 为空时不计算市场广度。
+// Stocks 是个股 / 场内基金日线数据源配置。Sources 按顺序回退；为空时不同步（本地已有数据仍可用）。
 type Stocks struct {
-	Source      string         `yaml:"source"`
-	Concurrency int            `yaml:"concurrency"`
-	Options     map[string]any `yaml:"options"`
+	Sources     []string                  `yaml:"sources"`
+	FundSources []string                  `yaml:"fund_sources"` // 场内基金单独的数据源顺序，为空同 sources
+	Source      string                    `yaml:"source"`       // 兼容旧配置：单个数据源
+	Concurrency int                       `yaml:"concurrency"`
+	Options     map[string]map[string]any `yaml:"options"` // 插件名 → 插件专属配置
+}
+
+// SourceList 返回去重后的数据源顺序（兼容旧的 source 字段）。
+func (s Stocks) SourceList() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, n := range append([]string{s.Source}, s.Sources...) {
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 type Sources struct {

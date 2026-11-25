@@ -31,9 +31,10 @@ func TestParseBars(t *testing.T) {
 func TestMergeStocksKeepsDelistedAShares(t *testing.T) {
 	groups := map[string][]string{"6": {"600000", "600519"}, "5": {"510300"}, "0": {"000001"}, "9": {"920001"}}
 	var delisted []json.RawMessage
-	_ = json.Unmarshal([]byte(`["600087","000979","159001","600000",123]`), &delisted)
+	_ = json.Unmarshal([]byte(`["600087","000979","159001","600000",123,"831000"]`), &delisted)
 	got := mergeStocks(groups, delisted)
-	want := []ds.Stock{{Code: "000001"}, {Code: "000979", Delisted: true}, {Code: "600000"}, {Code: "600087", Delisted: true}, {Code: "600519"}}
+	want := []ds.Stock{{Code: "000001", Kind: "stock"}, {Code: "000979", Kind: "stock", Delisted: true}, {Code: "159001", Kind: "fund", Delisted: true},
+		{Code: "510300", Kind: "fund"}, {Code: "600000", Kind: "stock"}, {Code: "600087", Kind: "stock", Delisted: true}, {Code: "600519", Kind: "stock"}}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
 	}

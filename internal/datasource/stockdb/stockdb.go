@@ -74,25 +74,25 @@ func (s *Source) ListStocks(ctx context.Context) ([]ds.Stock, error) {
 	return mergeStocks(groups, delisted), nil
 }
 
-// mergeStocks 合并在市与退市清单，只保留 A 股，按代码排序。退市清单里非字符串的项忽略。
+// mergeStocks 合并在市与退市清单，只保留 A 股与场内基金，按代码排序。退市清单里非字符串的项忽略。
 func mergeStocks(groups map[string][]string, delisted []json.RawMessage) []ds.Stock {
 	seen := map[string]bool{}
 	var out []ds.Stock
 	for _, codes := range groups {
 		for _, c := range codes {
-			if ds.IsAShare(c) && !seen[c] {
+			if k := ds.KindOf(c); k != "" && !seen[c] {
 				seen[c] = true
-				out = append(out, ds.Stock{Code: c})
+				out = append(out, ds.Stock{Code: c, Kind: k})
 			}
 		}
 	}
 	for _, raw := range delisted {
 		var c string
-		if json.Unmarshal(raw, &c) != nil || !ds.IsAShare(c) || seen[c] {
+		if json.Unmarshal(raw, &c) != nil || ds.KindOf(c) == "" || seen[c] {
 			continue
 		}
 		seen[c] = true
-		out = append(out, ds.Stock{Code: c, Delisted: true})
+		out = append(out, ds.Stock{Code: c, Kind: ds.KindOf(c), Delisted: true})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
 	return out
@@ -101,7 +101,7 @@ func mergeStocks(groups map[string][]string, delisted []json.RawMessage) []ds.St
 func compact(date string) string { return strings.ReplaceAll(date, "-", "") }
 
 func (s *Source) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar, error) {
-	if !ds.IsAShare(code) {
+	if ds.KindOf(code) == "" {
 		return nil, fmt.Errorf("stockdb: bad code %q", code)
 	}
 	k2 := "all:"

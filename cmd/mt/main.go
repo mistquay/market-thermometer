@@ -29,6 +29,7 @@ import (
 	_ "market-thermometer/internal/datasource/csindex"
 	_ "market-thermometer/internal/datasource/eastmoney"
 	_ "market-thermometer/internal/datasource/stockdb"
+	_ "market-thermometer/internal/datasource/tencent"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/store"
@@ -94,16 +95,37 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		return nil, err
 	}
 	runner := job.NewRunner(st, hub, market.CN, cfg.BackfillStartTime())
-	if name := cfg.Stocks.Source; name != "" {
-		e := env
-		e.Options = cfg.Stocks.Options
-		e.HTTP = &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{Proxy: nil}} // 本地库，大查询可能较慢
-		src, err := ds.BuildStock(name, e)
-		if err != nil {
-			st.Close()
-			return nil, err
+	built := map[string]ds.StockSource{}
+	buildList := func(names []string) ([]ds.StockSource, error) {
+		var out []ds.StockSource
+		for _, name := range names {
+			if src, ok := built[name]; ok {
+				out = append(out, src)
+				continue
+			}
+			e := env
+			e.Options = cfg.Stocks.Options[name]
+			e.HTTP = &http.Client{Timeout: 5 * time.Minute, Transport: &http.Transport{Proxy: nil}}
+			src, err := ds.BuildStock(name, e)
+			if err != nil {
+				return nil, err
+			}
+			built[name] = src
+			out = append(out, src)
 		}
-		runner.SetStocks(src, cfg.Stocks.Concurrency)
+		return out, nil
+	}
+	stockSrcs, err := buildList(cfg.Stocks.SourceList())
+	if err == nil {
+		var fundSrcs []ds.StockSource
+		if fundSrcs, err = buildList(cfg.Stocks.FundSources); err == nil {
+			runner.SetStocks(stockSrcs, cfg.Stocks.Concurrency)
+			runner.SetFundSources(fundSrcs)
+		}
+	}
+	if err != nil {
+		st.Close()
+		return nil, err
 	}
 	return &app{cfg: cfg, store: st, hub: hub, runner: runner}, nil
 }
@@ -137,7 +159,7 @@ func cmdServe(args []string) error {
 	srv := &http.Server{
 		Addr: a.cfg.Listen,
 		Handler: web.New(web.Options{
-			PasswordHash: a.cfg.AdminPasswordHash, TrustProxy: *trustProxy, Static: webui.FS(), StockSource: a.cfg.Stocks.Source,
+			PasswordHash: a.cfg.AdminPasswordHash, TrustProxy: *trustProxy, Static: webui.FS(), StockSource: strings.Join(a.cfg.Stocks.SourceList(), " → "),
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -173,7 +173,7 @@ export const api = {
     request<Series>('GET', `/api/series?metric=${encodeURIComponent(metric)}&source=${encodeURIComponent(source)}`),
   startSync: (full: boolean) => request<JobStatus>('POST', '/api/jobs/sync', { full }),
   stockStats: () =>
-    request<{ stats: { stocks: number; withBars: number; delisted: number; first: string; last: string }; source: string }>('GET', '/api/stocks/stats'),
+    request<{ stats: { stocks: number; withBars: number; delisted: number; funds: number; first: string; last: string }; source: string }>('GET', '/api/stocks/stats'),
   startBreadth: (full: boolean) => request<JobStatus>('POST', '/api/jobs/breadth', { full }),
   currentJob: () => request<JobStatus | null>('GET', '/api/jobs/current'),
   overview: () => request<Overview>('GET', '/api/overview'),

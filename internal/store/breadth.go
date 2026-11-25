@@ -16,7 +16,8 @@ const breadthSchema = `
 DROP TABLE IF EXISTS stock_close;
 DROP TABLE IF EXISTS stock_meta;
 CREATE TABLE IF NOT EXISTS stock_list (
-  code TEXT PRIMARY KEY, delisted INT NOT NULL DEFAULT 0, last_date INT, source TEXT, updated_at TEXT
+  code TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'stock', delisted INT NOT NULL DEFAULT 0,
+  last_date INT, source TEXT, updated_at TEXT
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS stock_bar (
   code TEXT NOT NULL, d INT NOT NULL, close REAL NOT NULL, mult REAL NOT NULL, source TEXT NOT NULL,
@@ -29,8 +30,19 @@ CREATE TABLE IF NOT EXISTS breadth_count (
 `
 
 func (s *Store) migrateBreadth() error {
-	_, err := s.db.Exec(breadthSchema)
-	return err
+	if _, err := s.db.Exec(breadthSchema); err != nil {
+		return err
+	}
+	// 早期版本的 stock_list 没有 kind 列
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('stock_list') WHERE name='kind'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.db.Exec(`ALTER TABLE stock_list ADD COLUMN kind TEXT NOT NULL DEFAULT 'stock'`)
+		return err
+	}
+	return nil
 }
 
 func dateInt(d string) int {
@@ -54,21 +66,25 @@ type StockInfo struct {
 	LastDate string
 }
 
-// UpsertStockList 写入数据源给出的个股清单（只更新退市标记，不动已有日线）。
+// UpsertStockList 写入数据源给出的证券清单（只更新类别与退市标记，不动已有日线）。
 func (s *Store) UpsertStockList(ctx context.Context, stocks []ds.Stock, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	st, err := tx.PrepareContext(ctx, `INSERT INTO stock_list(code,delisted,updated_at) VALUES(?,?,?)
-		ON CONFLICT(code) DO UPDATE SET delisted=excluded.delisted, updated_at=excluded.updated_at`)
+	st, err := tx.PrepareContext(ctx, `INSERT INTO stock_list(code,kind,delisted,updated_at) VALUES(?,?,?,?)
+		ON CONFLICT(code) DO UPDATE SET kind=excluded.kind, delisted=excluded.delisted, updated_at=excluded.updated_at`)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	for _, x := range stocks {
-		if _, err := st.ExecContext(ctx, x.Code, x.Delisted, ts(now)); err != nil {
+		kind := x.Kind
+		if kind == "" {
+			kind = ds.KindOf(x.Code)
+		}
+		if _, err := st.ExecContext(ctx, x.Code, kind, x.Delisted, ts(now)); err != nil {
 			return err
 		}
 	}
@@ -77,7 +93,7 @@ func (s *Store) UpsertStockList(ctx context.Context, stocks []ds.Stock, now time
 
 // StockList 返回本地个股清单，按代码排序。
 func (s *Store) StockList(ctx context.Context) ([]StockInfo, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT code, delisted, COALESCE(last_date,0) FROM stock_list ORDER BY code`)
+	rows, err := s.db.QueryContext(ctx, `SELECT code, kind, delisted, COALESCE(last_date,0) FROM stock_list ORDER BY code`)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +102,7 @@ func (s *Store) StockList(ctx context.Context) ([]StockInfo, error) {
 	for rows.Next() {
 		var x StockInfo
 		var last int
-		if err := rows.Scan(&x.Code, &x.Delisted, &last); err != nil {
+		if err := rows.Scan(&x.Code, &x.Kind, &x.Delisted, &last); err != nil {
 			return nil, err
 		}
 		if last > 0 {
@@ -153,11 +169,12 @@ func (s *Store) StockBars(ctx context.Context, code, after string) ([]ds.StockBa
 	return out, rows.Err()
 }
 
-// StockStats 汇总本地个股数据：股票数、有日线的股票数、退市数、最早 / 最晚日期。
+// StockStats 汇总本地证券数据：股票（含退市）与场内基金数量、有日线的数量、最早 / 最晚日期。
 type StockStats struct {
 	Stocks   int    `json:"stocks"`
 	WithBars int    `json:"withBars"`
 	Delisted int    `json:"delisted"`
+	Funds    int    `json:"funds"` // 有日线的场内基金数
 	First    string `json:"first"`
 	Last     string `json:"last"`
 }
@@ -165,8 +182,11 @@ type StockStats struct {
 func (s *Store) StockStats(ctx context.Context) (StockStats, error) {
 	var st StockStats
 	var last int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(last_date), COALESCE(SUM(delisted),0), COALESCE(MAX(last_date),0) FROM stock_list`).
-		Scan(&st.Stocks, &st.WithBars, &st.Delisted, &last)
+	err := s.db.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(kind='stock'),0), COALESCE(SUM(kind='stock' AND last_date IS NOT NULL),0),
+		COALESCE(SUM(kind='stock' AND delisted=1 AND last_date IS NOT NULL),0),
+		COALESCE(SUM(kind='fund' AND last_date IS NOT NULL),0), COALESCE(MAX(last_date),0) FROM stock_list`).
+		Scan(&st.Stocks, &st.WithBars, &st.Delisted, &st.Funds, &last)
 	if err != nil {
 		return st, err
 	}

@@ -41,8 +41,9 @@ type Runner struct {
 	start time.Time
 	now   func() time.Time
 
-	stocks    ds.StockSource // 个股数据源（市场广度），可为 nil
+	stocks    []ds.StockSource // 个股 / 场内基金日线数据源，按顺序回退；为空则不同步
 	stockConc int
+	funds     []ds.StockSource // 场内基金日线数据源顺序；为空时同 stocks
 
 	mu  sync.Mutex
 	cur *Status
@@ -154,13 +155,13 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 	// 个股日线与市场广度增量：首次回填耗时较长，需在数据页手动触发；之后每日同步自动进行
 	if ctx.Err() == nil && r.hasLocalStocks(ctx) {
 		var err error
-		if r.stocks != nil {
+		if len(r.stocks) > 0 {
 			err = r.syncStocks(ctx)
 		} else {
 			r.logf("未配置个股数据源，跳过个股日线同步，广度只用本地已有数据")
 		}
 		if err == nil {
-			err = r.computeBreadth(ctx, false)
+			err = r.computeBreadth(ctx, true) // 近期日线可能被修正，从本地全量重算
 		}
 		if err != nil {
 			r.logf("✗ 市场广度：%v", err)
@@ -169,7 +170,7 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 			}
 			detail += "；市场广度失败"
 		}
-	} else if r.stocks != nil {
+	} else if len(r.stocks) > 0 {
 		r.logf("个股日线尚未回填，跳过市场广度（在数据页点击“回填市场广度”）")
 	}
 	r.score(ctx, &state, &detail)

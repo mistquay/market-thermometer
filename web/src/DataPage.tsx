@@ -169,14 +169,14 @@ export default function DataPage() {
       {stocks && (
         <section className="panel stock-panel">
           <div>
-            <strong>本地个股日线</strong>
+            <strong>本地个股 / 场内基金日线</strong>
             <span className="muted">（我们自己的数据，市场广度只从这里计算；数据源：{stocks.source || '未配置'}）</span>
           </div>
           {stocks.stats.withBars === 0 ? (
             <span className="muted">尚未回填。点击“回填市场广度”从数据源拉取全部 A 股日线（含退市股）。</span>
           ) : (
             <span className="mono">
-              {stocks.stats.withBars.toLocaleString('zh-CN')} 只股票（其中退市 {stocks.stats.delisted.toLocaleString('zh-CN')}）· {stocks.stats.first} ~ {stocks.stats.last}
+              {stocks.stats.withBars.toLocaleString('zh-CN')} 只股票（其中退市 {stocks.stats.delisted.toLocaleString('zh-CN')}）· {stocks.stats.funds.toLocaleString('zh-CN')} 只场内基金 · {stocks.stats.first} ~ {stocks.stats.last}
             </span>
           )}
         </section>

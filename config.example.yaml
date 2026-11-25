@@ -22,9 +22,14 @@ sources:
     cn.market.amount:     []
   options: {}
 
-# 个股数据源：用于计算市场广度（T3）。留空则不计算，打分时自动不启用 T3。
+# 个股 / 场内基金日线数据源：按顺序回退，数据同步进本地库长期保存（市场广度等只从本地数据计算）。
+# stockdb：本地 free-stockdb（需先启动 stockdb.exe），提供证券清单与除权乘数；
+# tencent：腾讯行情，备用源，不提供清单（沿用本地清单），ETF 分红无法识别。
 stocks:
-  source: stockdb                   # 本地 free-stockdb，需先启动 stockdb.exe
-  concurrency: 2                    # 并发请求数；stockdb 慢时调小
+  sources: [stockdb, tencent]
+  # 场内基金（ETF/LOF）：stockdb 的基金历史不完整（如 510300 只有 2024 年起），腾讯历史完整但识别不了 ETF 分红
+  fund_sources: [tencent, stockdb]
+  concurrency: 4
   options:
-    url: http://127.0.0.1:7899
+    stockdb:
+      url: http://127.0.0.1:7899

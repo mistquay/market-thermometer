@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,15 +18,67 @@ const (
 	stockFetchFrom   = "2008-06-01" // 个股日线最晚起点：保证 2010 年初已有 200 根（backfill_start 更早则用它）
 	breadthCountFrom = "2010-01-01" // 广度序列起点
 	stockBatch       = 100          // 同步时每多少只股票提交一次
-	breadthSource    = "local"      // 广度由本地个股日线派生
+	// stockRevisitDays：每次同步往回重拉的自然日数（约 10 个交易日），覆盖本地已有数据。
+	// 数据源当日先发布临时数据、事后校对（stockdb 盘后 15:00 更新、24:00 校对入库），不重拉会把临时值永久留在本地。
+	stockRevisitDays = 15
+	breadthSource    = "local" // 广度由本地个股日线派生
 )
 
 // ErrNoStockSource 表示未配置个股数据源。
 var ErrNoStockSource = errors.New("未配置个股数据源（config.yaml 的 stocks.source），无法同步个股日线")
 
-// SetStocks 配置个股数据源与并发数；src 为 nil 时不同步个股日线（已存在本地的日线仍可用于计算广度）。
-func (r *Runner) SetStocks(src ds.StockSource, concurrency int) {
-	r.stocks, r.stockConc = src, max(1, concurrency)
+// SetStocks 配置个股数据源（按顺序回退）与并发数；为空时不同步个股日线（本地已有日线仍可用于计算广度）。
+func (r *Runner) SetStocks(srcs []ds.StockSource, concurrency int) {
+	r.stocks, r.stockConc = srcs, max(1, concurrency)
+}
+
+// SetFundSources 单独指定场内基金日线的数据源顺序；不设置时与个股相同。
+func (r *Runner) SetFundSources(srcs []ds.StockSource) { r.funds = srcs }
+
+func (r *Runner) chain(kind string) []ds.StockSource {
+	if kind == ds.KindFund && len(r.funds) > 0 {
+		return r.funds
+	}
+	return r.stocks
+}
+
+func (r *Runner) stockNames() string {
+	var names []string
+	for _, s := range r.stocks {
+		names = append(names, s.Name())
+	}
+	return strings.Join(names, " → ")
+}
+
+// listStocks 从第一个支持且成功的数据源取证券清单。
+func (r *Runner) listStocks(ctx context.Context) ([]ds.Stock, string, error) {
+	var errs []error
+	for _, s := range r.stocks {
+		list, err := s.ListStocks(ctx)
+		if err == nil {
+			return list, s.Name(), nil
+		}
+		if !errors.Is(err, ds.ErrNotSupported) {
+			errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
+		}
+	}
+	return nil, "", errors.Join(errs...)
+}
+
+// fetchBars 依次尝试各数据源，返回第一个成功的结果及来源名。
+func (r *Runner) fetchBars(ctx context.Context, code, kind, from string) ([]ds.StockBar, string, error) {
+	var errs []error
+	for _, s := range r.chain(kind) {
+		bars, err := s.Bars(ctx, code, from, "")
+		if err == nil {
+			return bars, s.Name(), nil
+		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
+	}
+	return nil, "", errors.Join(errs...)
 }
 
 func breadthKind(full bool) string {
@@ -38,7 +91,7 @@ func breadthKind(full bool) string {
 // StartBreadth 在后台同步个股日线并计算市场广度。
 // 个股日线总是增量同步（可中断续传）；full=true 时从本地日线全量重算广度。
 func (r *Runner) StartBreadth(full bool) (*Status, error) {
-	if r.stocks == nil {
+	if len(r.stocks) == 0 {
 		return nil, ErrNoStockSource
 	}
 	id, err := r.begin(breadthKind(full))
@@ -51,7 +104,7 @@ func (r *Runner) StartBreadth(full bool) (*Status, error) {
 
 // RunBreadth 同步执行（供 CLI 使用）。
 func (r *Runner) RunBreadth(ctx context.Context, full bool) (*Status, error) {
-	if r.stocks == nil {
+	if len(r.stocks) == 0 {
 		return nil, ErrNoStockSource
 	}
 	id, err := r.begin(breadthKind(full))
@@ -66,7 +119,7 @@ func (r *Runner) runBreadthJob(ctx context.Context, id int64, full bool) {
 	state, detail := "done", "个股日线同步、市场广度计算完成"
 	err := r.syncStocks(ctx)
 	if err == nil {
-		err = r.computeBreadth(ctx, full)
+		err = r.computeBreadth(ctx, true) // 近期日线可能被修正，总是从本地全量重算（约 20 秒）
 	}
 	if err != nil {
 		state, detail = "failed", err.Error()
@@ -83,29 +136,38 @@ func (r *Runner) hasLocalStocks(ctx context.Context) bool {
 	return err == nil && st.WithBars > 0
 }
 
-// syncStocks 从个股数据源增量同步日线到本地库。每只股票从本地最后日期（含）开始拉取，
-// 已退市且本地已有数据的股票跳过。可随时中断，已提交的批次保留。
+// syncStocks 从数据源增量同步个股与场内基金日线到本地库。证券清单取自第一个支持的数据源，
+// 都不可用时沿用本地清单；每只证券从本地最后日期（含）开始拉取，数据源按顺序回退；
+// 已退市且本地已有数据的跳过。可随时中断，已提交的批次保留。
 func (r *Runner) syncStocks(ctx context.Context) error {
-	if r.stocks == nil {
+	if len(r.stocks) == 0 {
 		return ErrNoStockSource
 	}
-	srcList, err := r.stocks.ListStocks(ctx)
-	if err != nil {
-		return err
-	}
-	if err := r.store.UpsertStockList(ctx, srcList, r.now()); err != nil {
+	srcList, listFrom, err := r.listStocks(ctx)
+	if err != nil || srcList == nil {
+		if err != nil {
+			r.logf("✗ 证券清单：%v", err)
+		}
+		r.logf("没有数据源能提供证券清单，沿用本地清单（新上市证券要等清单源恢复后才会加入）")
+	} else if err := r.store.UpsertStockList(ctx, srcList, r.now()); err != nil {
 		return err
 	}
 	local, err := r.store.StockList(ctx)
 	if err != nil {
 		return err
 	}
-	inSource := make(map[string]bool, len(srcList))
+	if len(local) == 0 {
+		return errors.New("本地没有证券清单，且数据源无法提供")
+	}
+	inSource := make(map[string]bool, len(local))
+	for _, s := range local {
+		inSource[s.Code] = srcList == nil // 沿用本地清单时全部同步
+	}
 	for _, s := range srcList {
 		inSource[s.Code] = true
 	}
 	start := min(r.start.Format("2006-01-02"), stockFetchFrom)
-	type task struct{ code, from string }
+	type task struct{ code, kind, from string }
 	var tasks []task
 	for _, s := range local {
 		if !inSource[s.Code] || (s.Delisted && s.LastDate != "") {
@@ -113,17 +175,24 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 		}
 		from := start
 		if s.LastDate != "" {
-			from = s.LastDate
+			t, err := time.Parse("2006-01-02", s.LastDate)
+			if err != nil {
+				return fmt.Errorf("%s 最后日期异常：%w", s.Code, err)
+			}
+			from = max(start, t.AddDate(0, 0, -stockRevisitDays).Format("2006-01-02"))
 		}
-		tasks = append(tasks, task{s.Code, from})
+		tasks = append(tasks, task{s.Code, s.Kind, from})
 	}
-	r.logf("个股日线：数据源 %s 共 %d 只（含退市），本次需同步 %d 只", r.stocks.Name(), len(srcList), len(tasks))
+	if listFrom == "" {
+		listFrom = "本地"
+	}
+	r.logf("个股 / 场内基金日线：清单来自 %s，共 %d 只（含退市），本次需同步 %d 只；数据源 %s", listFrom, len(local), len(tasks), r.stockNames())
 	r.update(func(s *Status) { s.Total, s.Done, s.Current = len(tasks), 0, "stocks" })
 
 	type result struct {
-		code string
-		bars []ds.StockBar
-		err  error
+		code, src string
+		bars      []ds.StockBar
+		err       error
 	}
 	jobs, results := make(chan task), make(chan result)
 	var wg sync.WaitGroup
@@ -132,9 +201,9 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			for t := range jobs {
-				bars, err := r.stocks.Bars(ctx, t.code, t.from, "")
+				bars, src, err := r.fetchBars(ctx, t.code, t.kind, t.from)
 				select {
-				case results <- result{t.code, bars, err}:
+				case results <- result{t.code, src, bars, err}:
 				case <-ctx.Done():
 					return
 				}
@@ -153,14 +222,16 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	}()
 	go func() { wg.Wait(); close(results) }()
 
-	batch, rows := map[string][]ds.StockBar{}, 0
+	batch, rows, pending := map[string]map[string][]ds.StockBar{}, 0, 0 // 来源 → 代码 → 日线
+	bySrc := map[string]int{}
 	flush := func() error {
-		if len(batch) == 0 {
-			return nil
+		for src, b := range batch {
+			if err := r.store.SaveStockBars(context.WithoutCancel(ctx), src, b); err != nil {
+				return err
+			}
 		}
-		err := r.store.SaveStockBars(context.WithoutCancel(ctx), r.stocks.Name(), batch)
-		batch = map[string][]ds.StockBar{}
-		return err
+		batch, pending = map[string]map[string][]ds.StockBar{}, 0
+		return nil
 	}
 	var failed []string
 	began := r.now()
@@ -172,11 +243,16 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 				r.logf("✗ %s：%v", res.code, res.err)
 			}
 		case len(res.bars) > 0:
-			batch[res.code] = res.bars
+			if batch[res.src] == nil {
+				batch[res.src] = map[string][]ds.StockBar{}
+			}
+			batch[res.src][res.code] = res.bars
 			rows += len(res.bars)
+			bySrc[res.src]++
+			pending++
 		}
 		r.update(func(s *Status) { s.Done++ })
-		if len(batch) >= stockBatch {
+		if pending >= stockBatch {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -191,7 +267,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("已中断（已同步的部分保留，下次继续）：%w", err)
 	}
-	msg := fmt.Sprintf("✓ 个股日线：写入 %d 行，耗时 %v", rows, r.now().Sub(began).Round(time.Second))
+	msg := fmt.Sprintf("✓ 个股 / 场内基金日线：写入 %d 行，耗时 %v，来源 %v", rows, r.now().Sub(began).Round(time.Second), bySrc)
 	if len(failed) > 0 {
 		msg += fmt.Sprintf("；%d 只获取失败，下次重试", len(failed))
 	}
@@ -229,7 +305,7 @@ func (r *Runner) computeBreadth(ctx context.Context, full bool) error {
 				return fmt.Errorf("%s 广度状态损坏，请全量重算：%w", s.Code, err)
 			}
 		}
-		if s.LastDate != "" && st.LastDate < s.LastDate {
+		if s.Kind == ds.KindStock && s.LastDate != "" && st.LastDate < s.LastDate { // 广度只统计 A 股
 			tasks = append(tasks, task{s.Code, st})
 		}
 	}
