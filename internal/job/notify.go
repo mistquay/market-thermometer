@@ -183,6 +183,9 @@ func (p *Pusher) SetSignals(ctx context.Context, on bool) error {
 	if !on {
 		return p.store.SetSetting(ctx, SettingSignals, "")
 	}
+	if already, err := p.on(ctx, SettingSignals); err != nil || already {
+		return err // 已开启：不移动水位线，否则会漏推
+	}
 	params, err := p.store.ActiveParams(ctx, p.now())
 	if err != nil {
 		return err

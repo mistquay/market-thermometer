@@ -109,6 +109,9 @@ func TestDispatch(t *testing.T) {
 	}
 	// 周五：底部信号 + 武装失效（后者不推送）；全量重算后事件被删除重插，仍按 key 去重
 	seedScores(t, st, 6, []engine.Event{ev("2026-11-19", engine.EvBuyDip), ev("2026-11-20", engine.EvSellPeak), ev("2026-11-20", engine.EvDisarmed)})
+	if err := p.SetSignals(ctx, true); err != nil { // 已开启时重复开启：水位线不动，周五事件仍要推送
+		t.Fatal(err)
+	}
 	rep, err := p.Dispatch(ctx)
 	if err != nil || len(rep.Sent) != 1 {
 		t.Fatalf("friday: %+v %v", rep, err)

@@ -98,7 +98,11 @@ func (s *Scheduler) tick(ctx context.Context) {
 	have, degraded, err := s.complete(ctx, today)
 	if err != nil {
 		s.logf("调度：检查数据完整性失败：%v", err)
-		s.retryLater(now, deadline)
+		if final {
+			s.finish(ctx, today)
+		} else {
+			s.retryLater(now, deadline)
+		}
 		return
 	}
 	switch {
