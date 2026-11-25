@@ -118,6 +118,16 @@ export type BtResult = {
   corr: Num[][] | null
   events: SignalEvent[] | null
 }
+export type RobustOutcome = {
+  buySignals: number; sellSignals: number; few: boolean; error?: string
+  strategies: { name: string; totalRet: number; cagr: number; maxDD: number }[]
+}
+export type RobustResp = {
+  paramsVersion: string; ratio: number; from: string; elapsedMs: number
+  base: RobustOutcome
+  rows: { group: string; label: string; level: number; values: string; skip?: string; outcome?: RobustOutcome }[]
+  years: { from: string; to: string; label: string; outcome: RobustOutcome }[]
+}
 export type BacktestResp = { paramsVersion: string; activeVersion: string; params: FullParams; elapsedMs: number; result: BtResult }
 
 export type Overview = {
@@ -214,6 +224,8 @@ export const api = {
     request<{ version: string }>('POST', '/api/params', { name, params, activate }),
   backtest: (params: FullParams | null, config: { from: string; split: string }) =>
     request<BacktestResp>('POST', '/api/backtest', { params: params ?? undefined, config }),
+  robust: (params: FullParams | null, config: { from: string; split: string }) =>
+    request<RobustResp>('POST', '/api/backtest/robust', { params: params ?? undefined, config }),
   funds: () => request<{ watched: WatchedFund[]; infoCount: number; configured: boolean }>('GET', '/api/funds'),
   searchFunds: (q: string) => request<FundInfo[]>('GET', `/api/funds/search?q=${encodeURIComponent(q)}`),
   watchFund: (code: string) => request<{ ok: boolean }>('POST', '/api/funds/watch', { code }),

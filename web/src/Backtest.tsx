@@ -3,6 +3,7 @@ import { api, type BacktestResp, type BtGroup, type FullParams, type HStat, type
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { asMarkers, priceWithSignals } from './charts'
 import { fmt, pct, TIER_TEXT } from './temperature'
+import Robustness from './Robustness'
 
 type Field = { path: string; label: string; step?: number; hint?: string; bool?: boolean }
 type Group = { title: string; fields: Field[] }
@@ -397,6 +398,7 @@ export default function Backtest() {
             </>
           )}
           {r && r.days === 0 && <div className="panel empty">所选区间没有数据。</div>}
+          <Robustness params={params} from={from} split={split} />
         </div>
       </div>
     </div>
