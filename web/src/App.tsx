@@ -7,6 +7,7 @@ import DataPage from './DataPage'
 import Signals from './Signals'
 import Backtest from './Backtest'
 import Funds from './Funds'
+import Settings from './Settings'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -17,6 +18,7 @@ const PAGES = [
   { path: 'backtest', label: '回测', el: () => <Backtest /> },
   { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
+  { path: 'settings', label: '设置', el: () => <Settings /> },
 ]
 
 function currentPath() {

@@ -255,3 +255,25 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
   .table th:nth-child(2), .table td:nth-child(2) { display: none; }
   .main { padding: 16px; }
 }
+
+/* 设置 */
+.settings-section { display: flex; flex-direction: column; gap: 10px; padding-bottom: 14px; }
+.settings-section .field-check { padding: 0 16px; flex-wrap: wrap; }
+.table.static tbody tr { cursor: default; }
+.table.static tbody tr:hover { background: none; }
+.small { font-size: 12px; }
+.nowrap { white-space: nowrap; }
+.ok-text { color: var(--ok); }
+.bad-text { color: var(--bad); }
+.channel-form { border-top: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.form-grid .span-2 { grid-column: span 2; }
+.field select {
+  height: 36px; padding: 0 8px; border-radius: 6px; font: inherit; color: var(--ink);
+  border: 1px solid var(--line); background: var(--bg);
+}
+.form-foot { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 760px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .span-2 { grid-column: auto; }
+}

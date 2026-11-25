@@ -140,6 +140,13 @@ export type ScoreSeries = {
   thresholds: { cheap: number; expensive: number; extreme: number }
 }
 
+export type NotifyField = { key: string; label: string; help?: string; secret?: boolean; required?: boolean }
+export type NotifyKind = { name: string; label: string; fields: NotifyField[] }
+export type NotifyChannel = { id: number; kind: string; kindLabel: string; name: string; config: Record<string, string>; enabled: boolean }
+export type NotifyLog = { key: string; title: string; result: string; sentAt: string }
+export type NotifyState = { kinds: NotifyKind[]; channels: NotifyChannel[]; logs: NotifyLog[]; signals: boolean; since: string; weekly: boolean }
+export type ChannelInput = { kind: string; name: string; config: Record<string, string>; enabled: boolean }
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -196,4 +203,10 @@ export const api = {
   fundNAV: (code: string) => request<FundNAV[]>('GET', `/api/funds/${code}/nav`),
   startFunds: () => request<JobStatus>('POST', '/api/jobs/funds'),
   jobs: () => request<JobRun[]>('GET', '/api/jobs'),
+  notify: () => request<NotifyState>('GET', '/api/notify'),
+  saveNotifySettings: (body: { signals?: boolean; weekly?: boolean }) => request<NotifyState>('POST', '/api/notify/settings', body),
+  saveChannel: (id: number, c: ChannelInput) =>
+    id ? request<NotifyChannel>('PUT', `/api/notify/channels/${id}`, c) : request<NotifyChannel>('POST', '/api/notify/channels', c),
+  deleteChannel: (id: number) => request<{ ok: boolean }>('DELETE', `/api/notify/channels/${id}`),
+  testChannel: (id: number) => request<{ id: number; name: string; error?: string }>('POST', `/api/notify/channels/${id}/test`),
 }
