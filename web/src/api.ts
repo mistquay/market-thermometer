@@ -202,6 +202,8 @@ export type PortfolioAnalysis = {
   }
 }
 
+export type SecuritySeries = { kind: string; code: string; name: string; dates: string[]; close: number[]; adjusted: number[] }
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -264,6 +266,7 @@ export const api = {
   startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
   startGapFill: (source: string, codes: string[]) => request<JobStatus>('POST', '/api/jobs/gapfill', { source, codes }),
   searchSecurities: (q: string) => request<{ items: SecurityHit[]; names: number }>('GET', `/api/securities/search?q=${encodeURIComponent(q)}`),
+  securitySeries: (kind: string, code: string) => request<SecuritySeries>('GET', `/api/securities/${kind}/${code}/series`),
   startNames: () => request<JobStatus>('POST', '/api/jobs/names'),
   portfolios: () => request<PortfolioData[]>('GET', '/api/portfolios'),
   savePortfolio: (p: PortfolioData) => (p.id ? request<PortfolioData>('PUT', `/api/portfolios/${p.id}`, p) : request<PortfolioData>('POST', '/api/portfolios', p)),

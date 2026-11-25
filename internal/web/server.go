@@ -81,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/jobs/crosscheck", s.auth(s.startCrossCheck))
 	api.HandleFunc("POST /api/jobs/gapfill", s.auth(s.startGapFill))
 	api.HandleFunc("GET /api/securities/search", s.auth(s.searchSecurities))
+	api.HandleFunc("GET /api/securities/{kind}/{code}/series", s.auth(s.securitySeries))
 	api.HandleFunc("POST /api/jobs/names", s.auth(s.startNames))
 	api.HandleFunc("GET /api/portfolios", s.auth(s.portfolios))
 	api.HandleFunc("POST /api/portfolios", s.auth(s.savePortfolio))

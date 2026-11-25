@@ -11,6 +11,7 @@ import (
 
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
+	"market-thermometer/internal/portfolio"
 	"market-thermometer/internal/store"
 )
 
@@ -167,4 +168,52 @@ func (s *Server) analyzePortfolio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"portfolio": p, "result": out, "elapsedMs": time.Since(began).Milliseconds()})
+}
+
+// securitySeries 返回一只证券的本地价格序列：股票、场内基金给不复权收盘价与后复权价；场外基金给单位净值与累计净值。
+func (s *Server) securitySeries(w http.ResponseWriter, r *http.Request) {
+	kind, code := r.PathValue("kind"), r.PathValue("code")
+	if !reFundCode.MatchString(code) {
+		writeErr(w, http.StatusBadRequest, "证券代码应为 6 位数字")
+		return
+	}
+	names, err := s.store.SecurityNames(r.Context(), []store.Security{{Kind: kind, Code: code}})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := map[string]any{"kind": kind, "code": code, "name": names[kind+":"+code]}
+	switch kind {
+	case store.SecStock, store.SecFund:
+		bars, err := s.store.StockBars(r.Context(), code, "")
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		dates, closes, mults := make([]string, len(bars)), make([]float64, len(bars)), make([]float64, len(bars))
+		for i, b := range bars {
+			dates[i], closes[i], mults[i] = b.Date, b.Close, b.Mult
+		}
+		hfq := portfolio.HFQ(dates, closes, mults)
+		adj := make([]float64, len(dates))
+		for i, d := range dates {
+			adj[i] = hfq[d]
+		}
+		out["dates"], out["close"], out["adjusted"] = dates, closes, adj
+	case store.SecOFund:
+		navs, err := s.store.FundNAV(r.Context(), code)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		dates, nav, acc := make([]string, len(navs)), make([]float64, len(navs)), make([]float64, len(navs))
+		for i, n := range navs {
+			dates[i], nav[i], acc[i] = n.Date, n.NAV, n.AccNAV
+		}
+		out["dates"], out["close"], out["adjusted"] = dates, nav, acc
+	default:
+		writeErr(w, http.StatusBadRequest, "类别须为 stock / fund / ofund")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

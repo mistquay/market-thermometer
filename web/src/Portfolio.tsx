@@ -269,7 +269,7 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
           <tbody>
             {r.assets.map((x) => (
               <tr key={x.key}>
-                <td><span className="mono">{x.key.split(':')[1]}</span> {x.label !== x.key.split(':')[1] && x.label} <span className="tag tag-muted">{KIND_TEXT[x.key.split(':')[0]]}</span></td>
+                <td><a className="mono" href={`#/quote/${x.key.replace(':', '/')}`}>{x.key.split(':')[1]}</a> {x.label !== x.key.split(':')[1] && x.label} <span className="tag tag-muted">{KIND_TEXT[x.key.split(':')[0]]}</span></td>
                 <td className="num mono">{(x.weight * 100).toFixed(1)}%</td>
                 <td className="num mono">{(x.endWeight * 100).toFixed(1)}%</td>
                 <td className={`num mono ${dir(x.totalRet)}`}>{pct(x.totalRet)}</td>
