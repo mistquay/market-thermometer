@@ -195,7 +195,7 @@ export type PortfolioAnalysis = {
   result: {
     from: string; to: string; dates: string[]; nav: number[]; benchNav: number[]; drawdown: number[]
     stats: PfStats; bench: PfStats; beta: number | null; benchCorr: number | null
-    assets: (PfStats & { key: string; label: string; weight: number; endWeight: number; first: string; contribution: number })[]
+    assets: (PfStats & { key: string; label: string; weight: number; endWeight: number; first: string; last: string; stale: boolean; contribution: number })[]
     corrKeys: string[]; corr: (number | null)[][]
     years: { year: string; ret: number; bench: number; excess: number }[]
     missing: string[]; note?: string

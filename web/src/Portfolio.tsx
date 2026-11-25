@@ -252,6 +252,12 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
   ]
   return (
     <>
+      {r.assets.some((x) => x.stale) && (
+        <div className="notice">
+          以下持仓的本地数据早于 {r.to} 结束（退市、停更或尚未同步），之后的日子按最后价格计算：
+          {r.assets.filter((x) => x.stale).map((x) => `${x.label}（止于 ${x.last}）`).join('、')}
+        </div>
+      )}
       {r.missing.length > 0 && <div className="notice">以下持仓本地没有数据，未计入（其余持仓按权重重新归一化）：{r.missing.map((k) => k.split(':')[1]).join('、')}</div>}
       <div className="pf-tiles">
         {tiles.map(([k, v, sub]) => (
@@ -265,7 +271,7 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
       <section className="panel">
         <div className="panel-head"><strong>持仓</strong><span className="muted">买入持有：贡献 = 初始权重 × 区间收益，合计等于组合总收益；期末权重因涨跌漂移</span></div>
         <table className="table static">
-          <thead><tr><th>证券</th><th className="num">初始权重</th><th className="num">期末权重</th><th className="num">区间收益</th><th className="num">贡献</th><th className="num">年化波动</th><th className="num">最大回撤</th><th>本地数据起</th></tr></thead>
+          <thead><tr><th>证券</th><th className="num">初始权重</th><th className="num">期末权重</th><th className="num">区间收益</th><th className="num">贡献</th><th className="num">年化波动</th><th className="num">最大回撤</th><th>本地数据</th></tr></thead>
           <tbody>
             {r.assets.map((x) => (
               <tr key={x.key}>
@@ -276,7 +282,10 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
                 <td className={`num mono ${dir(x.contribution)}`}>{pct(x.contribution)}</td>
                 <td className="num mono">{pct(x.vol)}</td>
                 <td className="num mono">{pct(x.maxDD)}</td>
-                <td className="mono muted">{x.first}</td>
+                <td className="mono muted nowrap">
+                  {x.first} ~ {x.last}
+                  {x.stale && <div className="bad-text small">数据止于 {x.last}，之后按最后价格计算</div>}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -308,7 +317,7 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
       </div>
       <p className="disclaimer">
         口径：股票、场内基金用不复权收盘价与除权乘数链式算出的后复权价（ETF 分红没有除权标注，收益会被低估）；场外基金用累计净值（T+1 公布）；
-        停牌日价格不变。只描述历史表现，不构成投资建议。
+        停牌日价格不变。基准沪深300 是价格指数、不含分红，而持仓收益含分红，超额收益每年约高估 2–3 个百分点。只描述历史表现，不构成投资建议。
       </p>
     </>
   )

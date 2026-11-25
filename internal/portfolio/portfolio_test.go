@@ -17,6 +17,11 @@ func TestAnalyzeBuyAndHold(t *testing.T) {
 	c := Asset{Key: "fund:510300", Weight: 1} // 没有数据
 	out := Analyze(Input{Calendar: cal, Bench: bench, Assets: []Asset{a, b, c}})
 
+	for _, s := range out.Assets {
+		if s.Key == "ofund:110022" && (s.Last != "2026-01-07" || s.Stale) {
+			t.Fatalf("last/stale: %+v", s)
+		}
+	}
 	if len(out.Missing) != 1 || out.Missing[0] != "fund:510300" {
 		t.Fatalf("missing: %v", out.Missing)
 	}

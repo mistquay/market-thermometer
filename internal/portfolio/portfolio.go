@@ -39,6 +39,8 @@ type AssetStat struct {
 	Weight       float64 `json:"weight"`    // 归一化后的初始权重
 	EndWeight    float64 `json:"endWeight"` // 期末权重（持有不动导致漂移）
 	First        string  `json:"first"`     // 本地最早数据日
+	Last         string  `json:"last"`      // 本地最新数据日
+	Stale        bool    `json:"stale"`     // 本地数据早于区间末日结束（退市、停更或未同步）：之后按最后价格填充
 	Contribution float64 `json:"contribution"`
 	Stats
 }
@@ -75,19 +77,20 @@ type Output struct {
 func Analyze(in Input) Output {
 	out := Output{Missing: []string{}, Assets: []AssetStat{}, Years: []Year{}}
 	var assets []Asset
-	firsts := map[string]string{}
+	firsts, lasts := map[string]string{}, map[string]string{}
 	for _, a := range in.Assets {
 		if len(a.Prices) == 0 || a.Weight <= 0 {
 			out.Missing = append(out.Missing, a.Key)
 			continue
 		}
-		first := ""
+		first, last := "", ""
 		for d := range a.Prices {
 			if first == "" || d < first {
 				first = d
 			}
+			last = max(last, d)
 		}
-		firsts[a.Key] = first
+		firsts[a.Key], lasts[a.Key] = first, last
 		assets = append(assets, a)
 	}
 	if len(assets) == 0 {
@@ -170,7 +173,8 @@ func Analyze(in Input) Output {
 			nav[i] = px[k][i] / px[k][0]
 		}
 		rets[k] = returns(nav)
-		st := AssetStat{Key: a.Key, Label: a.Label, Weight: a.Weight / totalW, First: firsts[a.Key], Stats: stats(nav)}
+		st := AssetStat{Key: a.Key, Label: a.Label, Weight: a.Weight / totalW, First: firsts[a.Key], Last: lasts[a.Key], Stats: stats(nav)}
+		st.Stale = st.Last < cal[n-1]
 		st.Contribution = st.Weight * st.TotalRet // 买入持有：贡献 = 初始权重 × 区间收益，合计等于组合收益
 		st.EndWeight = units[k] * px[k][n-1] / out.NAV[n-1]
 		out.Assets = append(out.Assets, st)
