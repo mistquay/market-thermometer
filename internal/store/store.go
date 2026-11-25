@@ -80,6 +80,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate funds: %w", err)
 	}
+	if err := st.migrateNotify(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate notify: %w", err)
+	}
 	return st, nil
 }
 
