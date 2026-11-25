@@ -126,6 +126,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		if fundSrcs, err = buildList(cfg.Stocks.FundSources); err == nil {
 			runner.SetStocks(stockSrcs, cfg.Stocks.Concurrency)
 			runner.SetFundSources(fundSrcs)
+			runner.SetSkipFunds(cfg.Stocks.SkipFunds)
 		}
 	}
 	if err != nil {

@@ -44,6 +44,7 @@ type Runner struct {
 	stocks    []ds.StockSource // 个股 / 场内基金日线数据源，按顺序回退；为空则不同步
 	stockConc int
 	funds     []ds.StockSource // 场内基金日线数据源顺序；为空时同 stocks
+	skipFunds bool             // 不同步场内基金日线
 	fundNAV   []ds.FundSource  // 场外基金净值数据源
 
 	mu  sync.Mutex

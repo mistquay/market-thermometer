@@ -31,6 +31,7 @@ type Funds struct {
 type Stocks struct {
 	Sources     []string                  `yaml:"sources"`
 	FundSources []string                  `yaml:"fund_sources"` // 场内基金单独的数据源顺序，为空同 sources
+	SkipFunds   bool                      `yaml:"skip_funds"`   // 不同步场内基金日线（由外部脚本导入等）
 	Source      string                    `yaml:"source"`       // 兼容旧配置：单个数据源
 	Concurrency int                       `yaml:"concurrency"`
 	Options     map[string]map[string]any `yaml:"options"` // 插件名 → 插件专属配置

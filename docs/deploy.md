@@ -1,7 +1,6 @@
 # 部署说明（大陆云服务器）
 
 > 2026-11-25 写。部署产物是**一个二进制 + 一个 SQLite 文件 + config.yaml**。纯 Go（`modernc.org/sqlite`），不需要 CGO，交叉编译即可。
-> 带 ⚠ 的是需要你决定的事项，见文末。
 
 ## 1. 构建
 
@@ -35,7 +34,7 @@ sudo chmod 600 /opt/mt/config.yaml
 - `listen: 127.0.0.1:8080`：只监听本机，由 Caddy 对外提供 HTTPS。
 - `db_path: data/mt.db`：相对路径以工作目录为准（systemd 里设为 `/opt/mt`）。
 - `http_proxy`：只给 Telegram 用，大陆服务器直连不了 `api.telegram.org`。可以填海外 HTTP 代理，或者不用 Telegram 渠道。A 股数据源一律直连。
-- `stocks`：⚠ 见第 6 节。
+- `stocks`：服务器上设为 `sources: []`、`skip_funds: true`（见第 6 节）。
 
 ## 3. systemd
 
@@ -110,7 +109,7 @@ sudo -u mt sqlite3 /opt/mt/data/mt.db ".backup '/opt/mt/backup/mt-$(date +%F).db
 - 恢复：`systemctl stop mt`，用备份文件替换 `data/mt.db`，删除旧的 `mt.db-wal`、`mt.db-shm`，再 `systemctl start mt`。
 - 推送渠道的 webhook、secret 存在库里（`notify_channel` 表），备份文件要按敏感数据保管。
 
-## 6. ⚠ 服务器上的个股数据源（需要你决定）
+## 6. 服务器上的个股数据源（2026-11-25 已定：方案 A）
 
 stockdb 只在你本机运行，服务器上没有。腾讯能当个股源，但实测会被 WAF 拦截：
 
@@ -125,7 +124,7 @@ stockdb 只在你本机运行，服务器上没有。腾讯能当个股源，但
 | B. 本机同步后上传 | 本机每天跑完同步（stockdb 可用），再把库上传到服务器（`sqlite3 .backup` 后 `rsync`，或只导出增量） | 本机要每天开机；整库约 800MB，增量导出需要另写工具 |
 | C. 腾讯限量增量 | 服务器用腾讯，但每天只同步一部分股票（轮转），几天覆盖一轮 | 广度有几天滞后；WAF 规则不明，仍可能被封 |
 
-建议先用 **A**：温度计打分不依赖个股数据，部署最简单。等决定是否启用广度（T3）以后，再看要不要上 B。
+**已定方案 A**：服务器配置 `stocks.sources: []`、`stocks.skip_funds: true`，只同步指标。温度计打分不依赖个股数据；以后要启用广度（T3）时再考虑 B。场内基金日线由用户另写脚本获取后导入。
 
 ## 7. 升级
 

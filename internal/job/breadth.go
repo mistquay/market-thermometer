@@ -36,6 +36,9 @@ func (r *Runner) SetStocks(srcs []ds.StockSource, concurrency int) {
 // SetFundSources 单独指定场内基金日线的数据源顺序；不设置时与个股相同。
 func (r *Runner) SetFundSources(srcs []ds.StockSource) { r.funds = srcs }
 
+// SetSkipFunds 为 true 时同步个股日线时跳过场内基金。
+func (r *Runner) SetSkipFunds(skip bool) { r.skipFunds = skip }
+
 func (r *Runner) chain(kind string) []ds.StockSource {
 	if kind == ds.KindFund && len(r.funds) > 0 {
 		return r.funds
@@ -171,7 +174,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 	type task struct{ code, kind, from string }
 	var tasks []task
 	for _, s := range local {
-		if !inSource[s.Code] || (s.Delisted && s.LastDate != "") {
+		if !inSource[s.Code] || (s.Delisted && s.LastDate != "") || (r.skipFunds && s.Kind == ds.KindFund) {
 			continue
 		}
 		from := start

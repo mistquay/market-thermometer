@@ -42,7 +42,7 @@
 ### P1 收尾进度（2026-11-25 第二个会话更新）
 
 - 已完成：M5 推送（`internal/notify` 四个渠道 + `job.Pusher` + 设置页）、调度（`job.Scheduler`，`mt serve -schedule=false` 可关）、数据质量页（`internal/quality` + 质量页）、回测稳健性（`backtest.Perturb` / `Years` + 回测页面板）、部署文档 `docs/deploy.md`。
-- 未完成：场内基金回填只完成 364 / 2,192 只（158000–159399 段，510300、159915 尚未回填），两次被腾讯 WAF 拦截（见 design.md §2）；服务器个股源方案待用户决定（deploy.md §6）。
+- 场内基金只回填了 364 / 2,192 只，用户决定暂不回填（后续自己写脚本用不同 IP 获取后导入），本地 `skip_funds: true`；服务器不同步个股（deploy.md §6 方案 A）。
 - 下面是原始任务清单，保留作参考。
 
 ### 未完成事项（P1 收尾，按顺序做）

@@ -30,6 +30,7 @@ stocks:
   # 场内基金（ETF/LOF）只用腾讯：stockdb 的基金历史不完整（如 510300 只有 2024 年起），
   # 回退到它会把不完整的历史存进本地且以后补不上；腾讯不可用时这次跳过，下次从头拉。腾讯识别不了 ETF 分红。
   fund_sources: [tencent]
+  skip_funds: false               # true：不同步场内基金日线（例如改由外部脚本导入）
   concurrency: 4
   options:
     stockdb:
