@@ -10,6 +10,7 @@ import Funds from './Funds'
 import Settings from './Settings'
 import Quality from './Quality'
 import Plugins from './Plugins'
+import Portfolio from './Portfolio'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -18,6 +19,7 @@ const PAGES = [
   { path: 'history', label: '历史', el: () => <History /> },
   { path: 'signals', label: '信号', el: () => <Signals /> },
   { path: 'backtest', label: '回测', el: () => <Backtest /> },
+  { path: 'portfolio', label: '组合', el: () => <Portfolio /> },
   { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
   { path: 'quality', label: '质量', el: () => <Quality /> },

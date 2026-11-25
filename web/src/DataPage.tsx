@@ -41,6 +41,8 @@ const JOB_TEXT: Record<string, string> = {
   funds: '基金净值同步',
   crosscheck: '交叉核对',
   gapfill: '补缺口',
+  names: '证券名称',
+  derived: '派生指标重算',
 }
 
 const STATE_TEXT: Record<JobStatus['state'], string> = {

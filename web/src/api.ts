@@ -25,7 +25,7 @@ export type Series = { metric: string; source: string; points: Point[] }
 
 export type JobStatus = {
   id: number
-  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck' | 'gapfill'
+  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck' | 'gapfill' | 'names'
   state: 'running' | 'done' | 'failed' | 'partial'
   total: number
   done: number
@@ -185,6 +185,23 @@ export type PluginInfo = {
   process?: { running: boolean; disabled: boolean; pid?: number; starts: number; lastError?: string; stderr: string[]; command: string[]; dir: string }
 }
 
+export type SecurityHit = { code: string; kind: 'stock' | 'fund' | 'ofund'; name: string; type?: string; hasData: boolean; delisted?: boolean }
+export type PortfolioItem = { kind: string; code: string; weight: number; name?: string }
+export type PortfolioData = { id: number; name: string; note: string; start: string; items: PortfolioItem[]; updatedAt: string }
+export type PfStats = { totalRet: number; cagr: number; vol: number; maxDD: number; sharpe: number | null }
+export type PortfolioAnalysis = {
+  portfolio: PortfolioData
+  elapsedMs: number
+  result: {
+    from: string; to: string; dates: string[]; nav: number[]; benchNav: number[]; drawdown: number[]
+    stats: PfStats; bench: PfStats; beta: number | null; benchCorr: number | null
+    assets: (PfStats & { key: string; label: string; weight: number; endWeight: number; first: string; contribution: number })[]
+    corrKeys: string[]; corr: (number | null)[][]
+    years: { year: string; ret: number; bench: number; excess: number }[]
+    missing: string[]; note?: string
+  }
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -246,6 +263,12 @@ export const api = {
   quality: () => request<QualityReport>('GET', '/api/quality'),
   startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
   startGapFill: (source: string, codes: string[]) => request<JobStatus>('POST', '/api/jobs/gapfill', { source, codes }),
+  searchSecurities: (q: string) => request<{ items: SecurityHit[]; names: number }>('GET', `/api/securities/search?q=${encodeURIComponent(q)}`),
+  startNames: () => request<JobStatus>('POST', '/api/jobs/names'),
+  portfolios: () => request<PortfolioData[]>('GET', '/api/portfolios'),
+  savePortfolio: (p: PortfolioData) => (p.id ? request<PortfolioData>('PUT', `/api/portfolios/${p.id}`, p) : request<PortfolioData>('POST', '/api/portfolios', p)),
+  deletePortfolio: (id: number) => request<{ ok: boolean }>('DELETE', `/api/portfolios/${id}`),
+  analyzePortfolio: (id: number) => request<PortfolioAnalysis>('GET', `/api/portfolios/${id}/analysis`),
   plugins: () => request<PluginInfo[]>('GET', '/api/plugins'),
   savePlugin: (kind: string, name: string, body: { enabled: boolean; config: Record<string, string> }) =>
     request<{ ok: boolean }>('PUT', `/api/plugins/${kind}/${name}`, body),

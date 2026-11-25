@@ -305,3 +305,21 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 .plugin-values { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .plugin-proc .log { margin-top: 6px; max-height: 240px; }
 .plugin-card .channel-form { border-top: none; padding: 8px 0 0; }
+
+/* 组合 */
+.pf-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start; }
+.pf-list { display: flex; flex-direction: column; padding: 6px; }
+.pf-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.pf-item:hover { background: var(--bg); }
+.pf-item.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pf-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.pf-editor .form-grid, .pf-editor .notice { margin: 0 16px 12px; }
+.pf-editor .fund-search { padding: 0 16px 12px; }
+.pf-weight { width: 90px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; text-align: right; }
+.pf-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.pf-tile { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.pf-tile strong { font-size: 22px; }
+.pf-two { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; align-items: start; }
+@media (max-width: 1000px) {
+  .pf-layout, .pf-two { grid-template-columns: 1fr; }
+}
