@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"market-thermometer/internal/plugin"
 )
 
 var testKind = Kind{
@@ -19,7 +21,7 @@ var testKind = Kind{
 func TestMaskMerge(t *testing.T) {
 	old := map[string]string{"webhook": "https://x.com/send?access_token=abcdef123456", "secret": "SECxyz", "chat": "1"}
 	m := testKind.Mask(old)
-	if m["webhook"] != maskPrefix+"3456" || m["secret"] != maskPrefix || m["chat"] != "1" {
+	if m["webhook"] != plugin.MaskPrefix+"3456" || m["secret"] != plugin.MaskPrefix || m["chat"] != "1" {
 		t.Fatalf("mask: %v", m)
 	}
 	// 打码值、空值 → 保持原值；普通字段按提交值；未声明字段丢弃

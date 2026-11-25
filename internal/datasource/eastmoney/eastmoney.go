@@ -17,11 +17,14 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/plugin"
 )
 
 const Name = "eastmoney"
 
 func init() {
+	plugin.MustRegister(plugin.Manifest{Name: Name, Kind: plugin.KindMetric, Label: "东方财富",
+		Description: "国债收益率、两融、流通市值（datacenter）；K 线（push2his）会封 IP，失败后短路 10 分钟"})
 	ds.Register(Name, func(env ds.Env) (ds.Source, error) {
 		return &Source{http: env.HTTP, now: env.Now}, nil
 	})

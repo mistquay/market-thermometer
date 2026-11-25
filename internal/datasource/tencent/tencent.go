@@ -21,11 +21,16 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/plugin"
 )
 
 const Name = "tencent"
 
 func init() {
+	plugin.MustRegister(plugin.Manifest{Name: Name, Kind: plugin.KindStock, Label: "腾讯行情",
+		Description:  "不复权日线 + 分红送转标注；不提供清单；大量请求会被 WAF 拦截（501）",
+		Capabilities: []string{"bars"},
+		Config:       []plugin.Field{{Key: "interval_ms", Label: "请求间隔（毫秒）", Type: "number", Help: "被拦截后自动暂停 30 分钟"}}})
 	ds.RegisterStock(Name, func(env ds.Env) (ds.StockSource, error) {
 		interval := 400 * time.Millisecond
 		if v, ok := env.Options["interval_ms"].(int); ok && v >= 0 {

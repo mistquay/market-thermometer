@@ -11,12 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
+
+	"market-thermometer/internal/plugin"
 )
 
 // Message 是一条推送消息。Lines 中允许使用 **粗体**，各渠道自行适配格式。
@@ -47,14 +48,8 @@ type Notifier interface {
 	Send(ctx context.Context, m Message) error
 }
 
-// Field 是渠道的一个配置字段。
-type Field struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Help     string `json:"help,omitempty"`
-	Secret   bool   `json:"secret,omitempty"` // 敏感：API 响应中打码，错误信息中擦除
-	Required bool   `json:"required,omitempty"`
-}
+// Field 是渠道的一个配置字段（与插件清单共用）。
+type Field = plugin.Field
 
 // Env 是构造渠道时由核心提供的环境。
 type Env struct {
@@ -68,6 +63,8 @@ type Kind struct {
 	Label  string                                                 `json:"label"`
 	Fields []Field                                                `json:"fields"`
 	New    func(cfg map[string]string, env Env) (Notifier, error) `json:"-"`
+	// External 表示来自外部进程插件（清单由插件宿主登记）。
+	External bool `json:"external,omitempty"`
 }
 
 var (
@@ -83,6 +80,9 @@ func Register(k Kind) {
 		panic("notify: duplicate kind " + k.Name)
 	}
 	kinds[k.Name] = k
+	if !k.External {
+		plugin.MustRegister(plugin.Manifest{Name: k.Name, Kind: plugin.KindNotifier, Label: k.Label, Config: k.Fields})
+	}
 }
 
 // Kinds 返回全部已注册渠道（按名称排序）。
@@ -122,66 +122,17 @@ func Build(kind string, cfg map[string]string, env Env) (Notifier, error) {
 }
 
 // Validate 检查必填字段。
-func (k Kind) Validate(cfg map[string]string) error {
-	for _, f := range k.Fields {
-		if f.Required && strings.TrimSpace(cfg[f.Key]) == "" {
-			return fmt.Errorf("缺少必填项：%s", f.Label)
-		}
-	}
-	return nil
-}
-
-// maskPrefix 是打码值的前缀；客户端提交的值以它开头时表示“保持原值”。
-const maskPrefix = "••••"
+func (k Kind) Validate(cfg map[string]string) error { return plugin.ValidateConfig(k.Fields, cfg) }
 
 // Mask 返回可安全输出的配置：敏感字段只保留末 4 位。
-func (k Kind) Mask(cfg map[string]string) map[string]string {
-	out := make(map[string]string, len(cfg))
-	maps.Copy(out, cfg)
-	for _, f := range k.Fields {
-		if v := cfg[f.Key]; f.Secret && v != "" {
-			tail := ""
-			if r := []rune(v); len(r) > 8 {
-				tail = string(r[len(r)-4:])
-			}
-			out[f.Key] = maskPrefix + tail
-		}
-	}
-	return out
-}
+func (k Kind) Mask(cfg map[string]string) map[string]string { return plugin.Mask(k.Fields, cfg) }
 
-// Merge 用客户端提交的配置更新旧配置：只保留声明过的字段；敏感字段为空或仍是打码值时保持原值。
+// Merge 用客户端提交的配置更新旧配置（敏感字段为空或仍是打码值时保持原值）。
 func (k Kind) Merge(old, submitted map[string]string) map[string]string {
-	out := map[string]string{}
-	for _, f := range k.Fields {
-		v := strings.TrimSpace(submitted[f.Key])
-		if f.Secret && (v == "" || strings.HasPrefix(v, maskPrefix)) {
-			v = old[f.Key]
-		}
-		if v != "" {
-			out[f.Key] = v
-		}
-	}
-	return out
+	return plugin.Merge(k.Fields, old, submitted)
 }
 
-// scrub 把错误信息中的敏感值替换为 ***（Go 的 url.Error 会带上含 token 的完整 URL）。
-func (k Kind) scrub(err error, cfg map[string]string) error {
-	if err == nil {
-		return nil
-	}
-	msg := err.Error()
-	for _, f := range k.Fields {
-		if v := cfg[f.Key]; f.Secret && len(v) >= 4 {
-			msg = strings.ReplaceAll(msg, v, "***")
-			msg = strings.ReplaceAll(msg, url.QueryEscape(v), "***")
-			if u, perr := url.Parse(v); perr == nil && u.RawQuery != "" { // webhook 中的 access_token 等参数
-				msg = strings.ReplaceAll(msg, u.RawQuery, "***")
-			}
-		}
-	}
-	return errors.New(msg)
-}
+func (k Kind) scrub(err error, cfg map[string]string) error { return plugin.Scrub(k.Fields, cfg, err) }
 
 type scrubbed struct {
 	n   Notifier

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/plugin"
 )
 
 // 东财基金净值插件（场外基金）。
@@ -19,6 +20,8 @@ import (
 const FundName = "eastmoney"
 
 func init() {
+	plugin.MustRegister(plugin.Manifest{Name: FundName, Kind: plugin.KindFund, Label: "东方财富基金",
+		Description: "场外基金清单与单位 / 累计净值全历史（只同步自选基金）"})
 	ds.RegisterFund(FundName, func(env ds.Env) (ds.FundSource, error) {
 		return &FundSource{http: env.HTTP}, nil
 	})

@@ -19,11 +19,16 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/plugin"
 )
 
 const Name = "stockdb"
 
 func init() {
+	plugin.MustRegister(plugin.Manifest{Name: Name, Kind: plugin.KindStock, Label: "free-stockdb（本机）",
+		Description:  "本机离线数据库，提供证券清单（含退市）、不复权日线与除权乘数；需先启动 stockdb.exe",
+		Capabilities: []string{"list", "bars"},
+		Config:       []plugin.Field{{Key: "url", Label: "接口地址", Help: "默认 http://127.0.0.1:7899"}}})
 	ds.RegisterStock(Name, func(env ds.Env) (ds.StockSource, error) {
 		base := "http://127.0.0.1:7899"
 		if v, ok := env.Options["url"].(string); ok && v != "" {

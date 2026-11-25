@@ -10,11 +10,14 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/plugin"
 )
 
 const Name = "csindex"
 
 func init() {
+	plugin.MustRegister(plugin.Manifest{Name: Name, Kind: plugin.KindMetric, Label: "中证指数官网",
+		Description: "指数收盘价、市盈率、成交额（perf/index-perf），不受限流影响"})
 	ds.Register(Name, func(env ds.Env) (ds.Source, error) {
 		return &Source{http: env.HTTP, now: env.Now}, nil
 	})
