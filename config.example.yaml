@@ -1,0 +1,30 @@
+# 复制为 config.yaml 后修改。config.yaml 含口令哈希，已被 .gitignore 排除。
+
+listen: 127.0.0.1:8080        # 公网部署时放在 Caddy/Nginx 之后，由反代负责 HTTPS
+db_path: data/mt.db
+admin_password_hash: ""       # 运行 `mt hashpw` 生成
+http_proxy: ""                # 仅用于需要代理的出站请求（如 Telegram），A股数据源直连
+backfill_start: 2005-01-01    # 全量回填起点
+
+sources:
+  enabled: [eastmoney, csindex]   # 为空则启用全部内置插件
+  # 指标 → 数据源优先级；主源失败时依次尝试下一个。只有口径一致的来源才能放在同一指标下。
+  # 未列出的指标按"所有提供它的插件"路由。
+  routes:
+    cn.hs300.close:       [csindex, eastmoney]   # 收盘价各源一致，可回退；东财 K 线易被封 IP，放在后面
+    cn.hs300.pe_ttm:      [csindex]
+    cn.bond.y10:          [eastmoney]
+    cn.csiall.amount:     [csindex]
+    cn.margin.buy_amount: [eastmoney]
+    cn.market.float_mv:   [eastmoney]
+    # 以下两个指标只能从东财 K 线（push2his，会封 IP）获取，择时层已不再使用，默认关闭（空列表 = 不同步）
+    cn.csiall.turnover:   []
+    cn.market.amount:     []
+  options: {}
+
+# 个股数据源：用于计算市场广度（T3）。留空则不计算，打分时自动不启用 T3。
+stocks:
+  source: stockdb                   # 本地 free-stockdb，需先启动 stockdb.exe
+  concurrency: 2                    # 并发请求数；stockdb 慢时调小
+  options:
+    url: http://127.0.0.1:7899

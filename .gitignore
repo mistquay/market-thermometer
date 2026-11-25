@@ -1,0 +1,16 @@
+# 本地配置与数据
+config.yaml
+data/
+*.db
+*.db-*
+
+# 构建产物
+/mt
+/mt.exe
+*.exe~
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
+
+# 前端
+web/node_modules/
+web/*.tsbuildinfo
