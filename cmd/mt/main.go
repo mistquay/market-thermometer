@@ -1,6 +1,6 @@
 // mt 市场波段温度计。
 //
-//	mt serve  [-c config.yaml]           启动 Web 服务（主要使用方式）
+//	mt serve  [-c config.yaml] [-trust-proxy] [-schedule=false]  启动 Web 服务与定时任务（主要使用方式）
 //	mt sync   [-c config.yaml] [-full]   命令行同步数据（调试/运维用）
 //	mt breadth [-c config.yaml] [-full]  计算市场广度（-full 清空后从头回填）
 //	mt score  [-c config.yaml]           按生效参数重算全部得分
@@ -148,6 +148,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	trustProxy := fs.Bool("trust-proxy", false, "信任反向代理的 X-Real-IP 头（部署在 Caddy/Nginx 之后时开启）")
+	schedule := fs.Bool("schedule", true, "启用每日定时同步与推送（交易日 17:30 起，22:00 截止）")
 	a, err := setup(fs, args)
 	if err != nil {
 		return err
@@ -186,6 +187,10 @@ func cmdServe(args []string) error {
 		defer cancel()
 		_ = srv.Shutdown(shut)
 	}()
+	if *schedule {
+		go job.NewScheduler(a.runner, pusher).Run(ctx)
+		log.Printf("定时任务已启用：交易日 17:30 同步，不完整时每 30 分钟重试，22:00 截止")
+	}
 	log.Printf("listening on http://%s  数据源: %v", a.cfg.Listen, a.hub.Sources())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
