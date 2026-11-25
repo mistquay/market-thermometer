@@ -128,3 +128,46 @@ func TestQualityAndCrossCheck(t *testing.T) {
 		t.Fatalf("diff src: %+v", res.Diffs[0])
 	}
 }
+
+// orderStocks 记录 Bars 的调用顺序。
+type orderStocks struct {
+	srcStocks
+	order []string
+}
+
+func (o *orderStocks) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar, error) {
+	o.order = append(o.order, code)
+	return o.srcStocks.Bars(ctx, code, from, to)
+}
+
+func TestSyncEmptyFirst(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 7, 10, 20, 0, 0, 0, ds.Shanghai)
+	bars := []ds.StockBar{{Date: "2026-07-09", Close: 1, Mult: 1}, {Date: "2026-07-10", Close: 1, Mult: 1}}
+	list := []ds.Stock{{Code: "000001", Kind: ds.KindStock}, {Code: "159001", Kind: ds.KindFund}, {Code: "510300", Kind: ds.KindFund}}
+	if err := st.UpsertStockList(ctx, list, now); err != nil {
+		t.Fatal(err)
+	}
+	// 000001、159001 已有日线；510300 还没有，应最先同步
+	if err := st.SaveStockBars(ctx, "x", map[string][]ds.StockBar{"000001": bars, "159001": bars}); err != nil {
+		t.Fatal(err)
+	}
+	src := &orderStocks{srcStocks: srcStocks{name: "x", bars: map[string][]ds.StockBar{"000001": bars, "159001": bars, "510300": bars}}}
+	r := NewRunner(st, nil, market.CN, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	r.now = func() time.Time { return now }
+	r.SetStocks([]ds.StockSource{src}, 1)
+	if _, err := r.begin("breadth"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.syncStocks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(src.order) != 3 || src.order[0] != "510300" {
+		t.Fatalf("order: %v", src.order)
+	}
+}

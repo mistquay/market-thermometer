@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -183,6 +184,12 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 		}
 		tasks = append(tasks, task{s.Code, s.Kind, from})
 	}
+	// 本地还没有日线的排在最前：数据源限流（如腾讯 WAF）时，配额先用于首次回填，而不是重拉已有数据，回填才能逐次推进
+	empty := map[string]bool{}
+	for _, s := range local {
+		empty[s.Code] = s.LastDate == ""
+	}
+	sort.SliceStable(tasks, func(i, j int) bool { return empty[tasks[i].code] && !empty[tasks[j].code] })
 	if listFrom == "" {
 		listFrom = "本地"
 	}
