@@ -86,15 +86,14 @@ func (s *Server) saveParams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// runBacktest：用请求中的参数（缺省为生效参数）在内存中重算并回测，不写库。
-func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
+// backtestRequest 解析回测请求：参数以生效参数为底合并（只提交改动的字段即可），区间设置可选。
+func (s *Server) backtestRequest(w http.ResponseWriter, r *http.Request) (p, active engine.Params, cfg backtest.Config, ok bool) {
 	active, err := s.store.ActiveParams(r.Context(), s.now())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 请求中的参数以生效参数为底合并：只提交改动的字段即可
-	p := active
+	p = active
 	req := struct {
 		Params *engine.Params   `json:"params"`
 		Config *backtest.Config `json:"config"`
@@ -107,7 +106,7 @@ func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cfg := backtest.DefaultConfig()
+	cfg = backtest.DefaultConfig()
 	if req.Config != nil {
 		cfg.From, cfg.To, cfg.Split = req.Config.From, req.Config.To, req.Config.Split
 		if _, err := time.Parse("2006-01-02", cfg.From); err != nil {
@@ -116,6 +115,15 @@ func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cfg.Position = p.Position
+	return p, active, cfg, true
+}
+
+// runBacktest：用请求中的参数（缺省为生效参数）在内存中重算并回测，不写库。
+func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
+	p, active, cfg, ok := s.backtestRequest(w, r)
+	if !ok {
+		return
+	}
 	start := time.Now()
 	days, _, err := job.LoadDays(r.Context(), s.store, s.hub, market.CN, p)
 	if err != nil {
@@ -127,5 +135,65 @@ func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"paramsVersion": p.Version(), "activeVersion": active.Version(), "params": p,
 		"elapsedMs": time.Since(start).Milliseconds(), "result": res,
+	})
+}
+
+// robustRow 是一个扰动变体的结果。
+type robustRow struct {
+	backtest.Variant
+	Outcome *backtest.Outcome `json:"outcome,omitempty"`
+}
+
+// runRobust：稳健性检验。以请求参数为基准，逐组做 ±20% 单参数扰动，并按自然年分段统计；只展示，不挑选参数、不写库。
+func (s *Server) runRobust(w http.ResponseWriter, r *http.Request) {
+	p, _, cfg, ok := s.backtestRequest(w, r)
+	if !ok {
+		return
+	}
+	start := time.Now()
+	ctx := r.Context()
+	cache := map[string][]engine.Day{} // 只改信号 / 仓位参数的变体复用同一份打分结果
+	load := func(q engine.Params) ([]engine.Day, error) {
+		k := q
+		k.Signal, k.Position = engine.SignalParams{}, engine.PositionParams{}
+		if d, ok := cache[k.Version()]; ok {
+			return d, nil
+		}
+		d, _, err := job.LoadDays(ctx, s.store, s.hub, market.CN, q)
+		if err == nil {
+			cache[k.Version()] = d
+		}
+		return d, err
+	}
+	run := func(q engine.Params) backtest.Outcome {
+		days, err := load(q)
+		if err != nil {
+			return backtest.Outcome{Error: err.Error()}
+		}
+		_, events := engine.RunSignals(days, q.Signal)
+		c := cfg
+		c.Position = q.Position
+		return backtest.Summarize(backtest.Run(days, events, c))
+	}
+	base := run(p)
+	if base.Error != "" {
+		writeErr(w, http.StatusInternalServerError, base.Error)
+		return
+	}
+	var rows []robustRow
+	for _, v := range backtest.Perturb(p) {
+		row := robustRow{Variant: v}
+		if v.Skip == "" {
+			o := run(v.Params)
+			row.Outcome = &o
+		}
+		rows = append(rows, row)
+	}
+	days, _ := load(p)
+	_, events := engine.RunSignals(days, p.Signal)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"paramsVersion": p.Version(), "ratio": backtest.PerturbRatio, "from": cfg.From,
+		"base": base, "rows": rows, "years": backtest.Years(days, events, cfg),
+		"elapsedMs": time.Since(start).Milliseconds(),
 	})
 }

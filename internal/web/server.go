@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/params", s.auth(s.params))
 	api.HandleFunc("POST /api/params", s.auth(s.saveParams))
 	api.HandleFunc("POST /api/backtest", s.auth(s.runBacktest))
+	api.HandleFunc("POST /api/backtest/robust", s.auth(s.runRobust))
 	api.HandleFunc("POST /api/jobs/sync", s.auth(s.startSync))
 	api.HandleFunc("POST /api/jobs/breadth", s.auth(s.startBreadth))
 	api.HandleFunc("GET /api/stocks/stats", s.auth(s.stockStats))
