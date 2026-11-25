@@ -12,6 +12,9 @@ import (
 const (
 	// SettingNamesAt：最近一次完整取到证券名称的时间（RFC3339）。
 	SettingNamesAt = "names.updated_at"
+	// SettingNamesTried：每日同步中最近一次尝试取名称的日期（YYYY-MM-DD），一天最多尝试一次（失败也算），
+	// 避免调度在 17:30–22:00 每 30 分钟重试时反复请求东财（push2 会封 IP）。
+	SettingNamesTried = "names.tried"
 	// SettingNamesCursor：名称列表分批拉取的游标（未取完时下次从这里继续）。
 	SettingNamesCursor = "names.cursor"
 	// namesMaxAge：证券名称完整取到后，过这么久才再刷新（名称变化很少）。
@@ -25,13 +28,22 @@ func (r *Runner) refreshNames(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	if !force && cursor == "" {
-		at, err := r.store.Setting(ctx, SettingNamesAt)
-		if err != nil {
+	if !force {
+		today := r.now().In(ds.Shanghai).Format("2006-01-02")
+		if tried, err := r.store.Setting(ctx, SettingNamesTried); err != nil || tried == today {
 			return err
 		}
-		if t, err := time.Parse(time.RFC3339, at); err == nil && r.now().Sub(t) < namesMaxAge {
-			return nil
+		if cursor == "" {
+			at, err := r.store.Setting(ctx, SettingNamesAt)
+			if err != nil {
+				return err
+			}
+			if t, err := time.Parse(time.RFC3339, at); err == nil && r.now().Sub(t) < namesMaxAge {
+				return nil
+			}
+		}
+		if err := r.store.SetSetting(ctx, SettingNamesTried, today); err != nil {
+			return err
 		}
 	}
 	sources := r.hub.NameSources()
