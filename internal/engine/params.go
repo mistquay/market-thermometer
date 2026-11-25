@@ -28,8 +28,33 @@ type Params struct {
 	EMASpan      int        `json:"emaSpan"` // T_s = EMA(T_pct, N)
 	Extreme      float64    `json:"extreme"` // 子维度 ≤ 此值计入 N_low，≥ 100-此值计入 N_high
 
+	// SkipTPct：跳过二次分位（设计文档方案 C），T_s = EMA(T_base)。二次分位在单边行情中会“适应”高温/低温。
+	SkipTPct bool `json:"skipTPct"`
+
 	// 状态机
 	Signal SignalParams `json:"signal"`
+
+	// 持仓建议（分层：估值档决定底仓，温度计信号在底仓上加减）
+	Position PositionParams `json:"position"`
+}
+
+// PositionParams：仓位 = clamp(底仓(估值档) ± Step, 0, 1)。底部信号后 +Step，顶部信号后 −Step，直到反向信号。
+type PositionParams struct {
+	BaseCheap     float64 `json:"baseCheap"`
+	BaseFair      float64 `json:"baseFair"`
+	BaseExpensive float64 `json:"baseExpensive"`
+	Step          float64 `json:"step"`
+}
+
+// Base 返回估值档对应的底仓；估值未知时按合理处理。
+func (p PositionParams) Base(tier string) float64 {
+	switch tier {
+	case TierCheap:
+		return p.BaseCheap
+	case TierExpensive:
+		return p.BaseExpensive
+	}
+	return p.BaseFair
 }
 
 // DefaultParams：四维等权。T3 广度依赖个股数据源；未配置时把 weights[2] 设为 0 即不启用（不算降级）。
@@ -40,7 +65,8 @@ func DefaultParams() Params {
 		RSIDailyW: 0.4, RSIWeeklyW: 0.6, RSIPeriod: 14,
 		Weights: [4]float64{1, 1, 1, 1},
 		EMASpan: 3, Extreme: 20,
-		Signal: DefaultSignalParams(),
+		Signal:   DefaultSignalParams(),
+		Position: PositionParams{BaseCheap: 0.8, BaseFair: 0.5, BaseExpensive: 0.2, Step: 0.2},
 	}
 }
 
@@ -80,6 +106,10 @@ func (p Params) Validate() error {
 	check(sp.RiseDays >= 1 && sp.RiseDays <= 20, "连续上升天数须在 1–20")
 	check(sp.ArmTimeout >= 1, "武装超时须 ≥1")
 	check(sp.Rebound > 0 && sp.Pullback > 0 && sp.DivergenceGap > 0, "回暖、回落、背离幅度须为正")
+	pp := p.Position
+	for _, v := range []float64{pp.BaseCheap, pp.BaseFair, pp.BaseExpensive, pp.Step} {
+		check(v >= 0 && v <= 1, "仓位参数须在 0–1")
+	}
 	for _, v := range []float64{sp.ArmLowCheap, sp.ArmLowFair, sp.ArmLowExpensive, sp.ArmHighCheap, sp.ArmHighFair,
 		sp.ArmHighExpensive, sp.DisarmMid, sp.CooldownLowEx, sp.CooldownHighEx, sp.RSIExit} {
 		check(v >= 0 && v <= 100, "温度类阈值须在 0–100")

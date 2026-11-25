@@ -17,6 +17,8 @@ type Config struct {
 	Split     string `json:"split"`     // 样本内 / 样本外分界：< Split 为样本内
 	Horizons  []int  `json:"horizons"`  // 前瞻收益的交易日数
 	MAEWindow int    `json:"maeWindow"` // 最大不利波动的观察窗口
+
+	Position engine.PositionParams `json:"-"` // 分层持仓参数，取自打分参数
 }
 
 func DefaultConfig() Config {
@@ -165,7 +167,7 @@ func Run(days []engine.Day, events []engine.Event, cfg Config) Result {
 		res.Dates = append(res.Dates, days[i].Date)
 	}
 	res.Close = closes[lo:hi]
-	res.Strategies = strategies(days, events, ma, lo, hi)
+	res.Strategies = strategies(days, events, ma, lo, hi, cfg.Position)
 	res.CorrNames, res.Corr = correlations(days[lo:hi])
 	return res
 }
@@ -290,52 +292,53 @@ func baseRate(closes []float64, lo, hi int, cfg Config) []HStat {
 }
 
 // strategies：信号在第 t 日收盘产生，第 t+1 日起生效（无未来函数）；不计交易成本。
-func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi int) []Strategy {
+func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi int, pp engine.PositionParams) []Strategy {
 	n := hi - lo
-	thermo := make([]bool, len(days))
-	pos := false
+	thermo := make([]float64, len(days))
+	layered := make([]float64, len(days))
+	pos, overlay := false, 0.0
 	evAt := map[int][]engine.Event{}
 	for _, e := range events {
 		evAt[e.Idx] = append(evAt[e.Idx], e)
 	}
-	valuation := make([]bool, len(days))
+	valuation := make([]float64, len(days))
 	vpos := false
 	for i := range days {
 		for _, e := range evAt[i] {
 			switch {
 			case e.Type == engine.EvBuyDip && !e.Observe:
-				pos = true
+				pos, overlay = true, pp.Step
 			case e.Type == engine.EvSellPeak:
-				pos = false
+				pos, overlay = false, -pp.Step
 			}
 		}
-		thermo[i] = pos
+		thermo[i] = b2f(pos)
+		layered[i] = math.Max(0, math.Min(1, pp.Base(days[i].Tier)+overlay))
 		switch days[i].Tier {
 		case engine.TierCheap:
 			vpos = true
 		case engine.TierExpensive:
 			vpos = false
 		}
-		valuation[i] = vpos
+		valuation[i] = b2f(vpos)
 	}
-	maPos := make([]bool, len(days))
+	maPos := make([]float64, len(days))
 	for i := range days {
-		maPos[i] = !math.IsNaN(ma[i]) && days[i].Close > ma[i]
+		maPos[i] = b2f(!math.IsNaN(ma[i]) && days[i].Close > ma[i])
 	}
-	hold := make([]bool, len(days))
+	hold := make([]float64, len(days))
 	for i := range hold {
-		hold[i] = true
+		hold[i] = 1
 	}
-	mk := func(name, label string, p []bool) Strategy {
+	// p[i] 为第 i 日收盘后的仓位（0–1），决定第 i+1 日的收益；未持仓部分收益为 0，不计交易成本。
+	mk := func(name, label string, p []float64) Strategy {
 		s := Strategy{Name: name, Label: label, Equity: make([]float64, n)}
-		eq, peak, held := 1.0, 1.0, 0
+		eq, peak, held := 1.0, 1.0, 0.0
 		for k := 0; k < n; k++ {
 			i := lo + k
 			if k > 0 {
-				if p[i-1] { // 前一日收盘时的持仓决定今日收益
-					eq *= days[i].Close / days[i-1].Close
-					held++
-				}
+				eq *= 1 + p[i-1]*(days[i].Close/days[i-1].Close-1)
+				held += p[i-1]
 				if p[i] != p[i-1] {
 					s.Switches++
 				}
@@ -347,12 +350,13 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 		s.TotalRet = eq - 1
 		if n > 1 {
 			s.CAGR = math.Pow(eq, 252/float64(n-1)) - 1
-			s.Exposure = float64(held) / float64(n-1)
+			s.Exposure = held / float64(n-1)
 		}
 		return s
 	}
 	return []Strategy{
 		mk("thermometer", "温度计信号持仓", thermo),
+		mk("layered", "估值底仓 + 温度计加减仓", layered),
 		mk("valuation", "估值档持仓（便宜买、昂贵卖）", valuation),
 		mk("ma200", "200 日均线择时", maPos),
 		mk("hold", "买入持有", hold),
@@ -360,6 +364,13 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 }
 
 // correlations：择时层已启用维度两两的 Pearson 相关系数（只用各维度均有值的日子）。
+func b2f(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func correlations(days []engine.Day) ([]string, [][]*float64) {
 	names := []string{"资金热度", "杠杆情绪", "市场广度", "价格动量"}
 	var idx []int

@@ -99,3 +99,26 @@ func TestObserveSignalExcludedFromStatsAndPosition(t *testing.T) {
 		t.Fatalf("observe signal should not open a position: %+v", r.Strategies[0])
 	}
 }
+
+// 分层持仓：合理档底仓 0.5；t=1 收盘底部信号 → 0.7；t=4 收盘顶部信号 → 0.3。手算净值。
+func TestLayeredPosition(t *testing.T) {
+	closes := []float64{100, 90, 80, 100, 120, 110}
+	days := mkDays(closes)
+	evs := []engine.Event{
+		{Date: days[1].Date, Idx: 1, Type: engine.EvBuyDip, Close: 90},
+		{Date: days[4].Date, Idx: 4, Type: engine.EvSellPeak, Close: 120},
+	}
+	cfg := Config{From: days[0].Date, Split: "9999", Horizons: []int{1}, MAEWindow: 1,
+		Position: engine.PositionParams{BaseCheap: 0.8, BaseFair: 0.5, BaseExpensive: 0.2, Step: 0.2}}
+	r := Run(days, evs, cfg)
+	var s Strategy
+	for _, x := range r.Strategies {
+		if x.Name == "layered" {
+			s = x
+		}
+	}
+	want := (1 + 0.5*(90.0/100-1)) * (1 + 0.7*(80.0/90-1)) * (1 + 0.7*(100.0/80-1)) * (1 + 0.7*(120.0/100-1)) * (1 + 0.3*(110.0/120-1))
+	if !near(s.TotalRet, want-1) || s.Switches != 2 {
+		t.Fatalf("layered %+v want %v", s, want-1)
+	}
+}

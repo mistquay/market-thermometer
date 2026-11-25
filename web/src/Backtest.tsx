@@ -4,11 +4,27 @@ import EChart, { cssVar, type EChartsOption } from './EChart'
 import { asMarkers, priceWithSignals } from './charts'
 import { fmt, pct, TIER_TEXT } from './temperature'
 
-type Field = { path: string; label: string; step?: number; hint?: string }
+type Field = { path: string; label: string; step?: number; hint?: string; bool?: boolean }
 type Group = { title: string; fields: Field[] }
 
 // 参数表单定义：path 为参数 JSON 中的路径（signal.xxx 为状态机参数，weights.N 为维度权重）
 const SCHEMA: Group[] = [
+  {
+    title: '规则开关',
+    fields: [
+      { path: 'skipTPct', label: '去掉二次分位（方案 C）', bool: true, hint: '温度直接用加权得分平滑，不再取近 3 年分位' },
+      { path: 'signal.topOnlyExpensive', label: '顶部信号只在估值昂贵时', bool: true, hint: '估值便宜/合理时不发卖出信号' },
+    ],
+  },
+  {
+    title: '分层持仓',
+    fields: [
+      { path: 'position.baseCheap', label: '底仓（便宜）', step: 0.05 },
+      { path: 'position.baseFair', label: '底仓（合理）', step: 0.05 },
+      { path: 'position.baseExpensive', label: '底仓（昂贵）', step: 0.05 },
+      { path: 'position.step', label: '信号加减仓', step: 0.05, hint: '底部信号后加、顶部信号后减，直到反向信号' },
+    ],
+  },
   {
     title: '估值层',
     fields: [
@@ -63,11 +79,11 @@ const SCHEMA: Group[] = [
   },
 ]
 
-function getPath(p: FullParams, path: string): number {
-  return path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], p) as number
+function getPath(p: FullParams, path: string): unknown {
+  return path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], p)
 }
 
-function setPath(p: FullParams, path: string, v: number): FullParams {
+function setPath(p: FullParams, path: string, v: number | boolean): FullParams {
   const next = structuredClone(p)
   const keys = path.split('.')
   let o = next as unknown as Record<string, unknown>
@@ -153,7 +169,7 @@ export default function Backtest() {
     if (!r || r.dates.length === 0) return null
     const ink = cssVar('--ink-2'), line = cssVar('--line')
     const colors: Record<string, string> = {
-      thermometer: cssVar('--accent'), valuation: cssVar('--t-hot-1'), ma200: cssVar('--dim-2'), hold: ink,
+      thermometer: cssVar('--accent'), layered: cssVar('--t-cold-2'), valuation: cssVar('--t-hot-1'), ma200: cssVar('--dim-2'), hold: ink,
     }
     return {
       animation: false,
@@ -207,18 +223,25 @@ export default function Backtest() {
             <fieldset key={g.title} className="bt-group">
               <legend>{g.title}</legend>
               {g.fields.map((f) => (
+                f.bool ? (
+                  <label key={f.path} className="field-check" title={f.hint}>
+                    <input type="checkbox" checked={!!getPath(params, f.path)} onChange={(e) => setParams(setPath(params, f.path, e.target.checked))} />
+                    <span>{f.label}</span>
+                  </label>
+                ) : (
                 <label key={f.path} className="field-inline" title={f.hint}>
                   <span>{f.label}</span>
                   <input
                     type="number"
                     step={f.step ?? 1}
-                    value={getPath(params, f.path) ?? ''}
+                    value={(getPath(params, f.path) as number) ?? ''}
                     onChange={(e) => {
                       const v = e.target.valueAsNumber
                       if (!Number.isNaN(v)) setParams(setPath(params, f.path, v))
                     }}
                   />
                 </label>
+                )
               ))}
             </fieldset>
           ))}
@@ -266,7 +289,7 @@ export default function Backtest() {
                   </thead>
                   <tbody>
                     {r.strategies.map((s) => (
-                      <tr key={s.name} className={s.name === 'thermometer' ? 'emph' : ''}>
+                      <tr key={s.name} className={s.name === 'thermometer' || s.name === 'layered' ? 'emph' : ''}>
                         <td>{s.label}</td>
                         <td className="num mono">{pct(s.totalRet)}</td>
                         <td className="num mono">{pct(s.cagr)}</td>

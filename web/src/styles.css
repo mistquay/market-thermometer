@@ -225,6 +225,7 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 }
 .field-inline input[type=date] { width: 100%; font-size: 12px; padding: 0 4px; }
 .field-inline { grid-template-columns: 1fr 120px; }
+.field-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); cursor: pointer; }
 .bt-actions { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
 .bt-save { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; }
 .bt-sets { display: flex; flex-direction: column; gap: 2px; font-size: 13px; border-top: 1px solid var(--line); padding-top: 10px; }

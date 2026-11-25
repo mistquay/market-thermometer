@@ -132,3 +132,16 @@ func TestTierChangeEvent(t *testing.T) {
 		t.Fatalf("events %v", types(evs))
 	}
 }
+
+func TestTopOnlyExpensive(t *testing.T) {
+	p := DefaultSignalParams()
+	p.TopOnlyExpensive = true
+	days := mk([]float64{90, 90}, []float64{1, 1}, 0, 3)
+	if _, evs := RunSignals(days, p); len(evs) != 0 {
+		t.Fatalf("fair tier must not arm top: %v", types(evs))
+	}
+	days[1].Tier = TierExpensive
+	if _, evs := RunSignals(days, p); !eq(types(evs), []string{EvTierChange, EvArmedTop}) {
+		t.Fatalf("expensive tier should arm: %v", types(evs))
+	}
+}

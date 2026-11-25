@@ -146,3 +146,14 @@ func TestDefaultParamsValid(t *testing.T) {
 		t.Fatal("invalid params accepted")
 	}
 }
+
+// 方案 C：跳过二次分位后，T_pct 即 T_base。
+func TestSkipTPct(t *testing.T) {
+	p := DefaultParams()
+	p.TimingWindow, p.TimingMinW, p.SkipTPct = 200, 60, true
+	days := Compute(synthetic(400), p)
+	d := days[399]
+	if math.IsNaN(d.TBase) || d.TPct != d.TBase {
+		t.Fatalf("tPct should equal tBase: %+v", d)
+	}
+}

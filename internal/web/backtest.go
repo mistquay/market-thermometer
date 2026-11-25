@@ -115,6 +115,7 @@ func (s *Server) runBacktest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	cfg.Position = p.Position
 	start := time.Now()
 	days, _, err := job.LoadDays(r.Context(), s.store, s.hub, market.CN, p)
 	if err != nil {

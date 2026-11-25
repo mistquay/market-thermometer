@@ -14,7 +14,8 @@ type SignalParams struct {
 	ArmHighCheap     float64 `json:"armHighCheap"`
 	ArmHighFair      float64 `json:"armHighFair"`
 	ArmHighExpensive float64 `json:"armHighExpensive"`
-	MinExtremeDims   int     `json:"minExtremeDims"` // 武装还需至少 N 个子维度处于极端区
+	MinExtremeDims   int     `json:"minExtremeDims"`   // 武装还需至少 N 个子维度处于极端区
+	TopOnlyExpensive bool    `json:"topOnlyExpensive"` // 顶部只在估值昂贵时武装（便宜/合理时不卖）
 
 	Rebound        float64 `json:"rebound"`        // 底部右侧回暖：T_s ≥ 本轮最低 + 此值
 	RiseDays       int     `json:"riseDays"`       // 且 T_s 连续上升天数
@@ -198,7 +199,7 @@ func RunSignals(days []Day, p SignalParams) ([]State, []Event) {
 			case d.TS <= p.armLow(d.Tier) && d.NLow >= p.MinExtremeDims:
 				s = State{Phase: PhaseBottomArmed, ArmedIdx: t, ArmedDate: d.Date, MinTS: d.TS, PriceAtMin: d.Close, Tier: s.Tier}
 				emit(EvArmedBottom, fmt.Sprintf("T_s %.1f ≤ 武装线 %.0f，%d 个维度处于冰点区", d.TS, p.armLow(d.Tier), d.NLow))
-			case d.TS >= p.armHigh(d.Tier) && d.NHigh >= p.MinExtremeDims:
+			case d.TS >= p.armHigh(d.Tier) && d.NHigh >= p.MinExtremeDims && (!p.TopOnlyExpensive || d.Tier == TierExpensive):
 				s = State{Phase: PhaseTopArmed, ArmedIdx: t, ArmedDate: d.Date, MaxTS: d.TS, PriceAtMax: d.Close, Tier: s.Tier}
 				emit(EvArmedTop, fmt.Sprintf("T_s %.1f ≥ 武装线 %.0f，%d 个维度处于过热区", d.TS, p.armHigh(d.Tier), d.NHigh))
 			}

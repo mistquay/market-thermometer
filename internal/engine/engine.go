@@ -176,7 +176,10 @@ func Compute(in Inputs, p Params) []Day {
 		d.TBase = tbase[t]
 		days[t] = d
 	}
-	tpct := indicator.RollingPct(tbase, p.TimingWindow, p.TimingMinW)
+	tpct := tbase
+	if !p.SkipTPct {
+		tpct = indicator.RollingPct(tbase, p.TimingWindow, p.TimingMinW)
+	}
 	ts := indicator.EMA(tpct, p.EMASpan)
 	for t := range days {
 		days[t].TPct, days[t].TS = tpct[t], ts[t]
