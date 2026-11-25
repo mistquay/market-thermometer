@@ -4,6 +4,7 @@
 //	mt sync   [-c config.yaml] [-full]   命令行同步数据（调试/运维用）
 //	mt breadth [-c config.yaml] [-full]  计算市场广度（-full 清空后从头回填）
 //	mt score  [-c config.yaml]           按生效参数重算全部得分
+//	mt import-bars [-c config.yaml] [-source 名称] 文件.csv  导入日线（code,date,close[,mult]），同日覆盖
 //	mt gapfill [-c config.yaml] -source tencent 代码…  用数据源补齐个股日线缺口（不覆盖已有数据）
 //	mt hashpw                            从标准输入读口令，输出 bcrypt 哈希，填入 config.yaml
 package main
@@ -33,6 +34,7 @@ import (
 	_ "market-thermometer/internal/datasource/stockdb"
 	_ "market-thermometer/internal/datasource/tencent"
 	_ "market-thermometer/internal/derived/ma200"
+	"market-thermometer/internal/importer"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/notify"
@@ -61,6 +63,8 @@ func main() {
 		err = cmdSync(os.Args[2:])
 	case "breadth":
 		err = cmdBreadth(os.Args[2:])
+	case "import-bars":
+		err = cmdImportBars(os.Args[2:])
 	case "gapfill":
 		err = cmdGapFill(os.Args[2:])
 	case "score":
@@ -76,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|import-bars|hashpw [-c config.yaml]")
 	os.Exit(2)
 }
 
@@ -326,6 +330,35 @@ func cmdBreadth(args []string) error {
 	if st.State != "done" {
 		return fmt.Errorf("结束状态：%s", st.State)
 	}
+	return nil
+}
+
+func cmdImportBars(args []string) error {
+	fs := flag.NewFlagSet("import-bars", flag.ExitOnError)
+	source := fs.String("source", "import", "写入 stock_bar.source 的来源名")
+	a, err := setup(fs, args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	if fs.NArg() != 1 {
+		return errors.New("用法：mt import-bars [-source 名称] 文件.csv（列：code,date,close[,mult]）")
+	}
+	f, err := os.Open(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	bars, err := importer.ParseBars(f)
+	if err != nil {
+		return err
+	}
+	res, err := importer.ImportBars(context.Background(), a.store, bars, *source, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Println(fmt.Sprintf("已导入 %d 只证券、%d 根日线（来源 %s）。", res.Codes, res.Rows, *source),
+		"含股票时运行 mt breadth -local 重算市场广度。")
 	return nil
 }
 

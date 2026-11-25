@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	ds "market-thermometer/internal/datasource"
 )
@@ -103,4 +104,24 @@ func (s *Store) InsertMissingBars(ctx context.Context, code, source string, bars
 		n += int(k)
 	}
 	return n, tx.Commit()
+}
+
+// EnsureStocks 把清单中没有的证券加进来（已有的不改动），用于导入外部数据。
+func (s *Store) EnsureStocks(ctx context.Context, codes []string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	st, err := tx.PrepareContext(ctx, `INSERT INTO stock_list(code,kind,delisted,updated_at) VALUES(?,?,0,?) ON CONFLICT(code) DO NOTHING`)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	for _, c := range codes {
+		if _, err := st.ExecContext(ctx, c, ds.KindOf(c), ts(now)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
