@@ -74,6 +74,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/funds/watch/{code}", s.auth(s.unwatchFund))
 	api.HandleFunc("GET /api/funds/{code}/nav", s.auth(s.fundNAV))
 	api.HandleFunc("POST /api/jobs/funds", s.auth(s.startFunds))
+	api.HandleFunc("GET /api/quality", s.auth(s.quality))
+	api.HandleFunc("POST /api/jobs/crosscheck", s.auth(s.startCrossCheck))
 	api.HandleFunc("GET /api/notify", s.auth(s.notifyState))
 	api.HandleFunc("POST /api/notify/settings", s.auth(s.saveNotifySettings))
 	api.HandleFunc("POST /api/notify/channels", s.auth(s.saveChannel))
