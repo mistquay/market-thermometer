@@ -79,3 +79,20 @@ func (h *Hub) Fetch(ctx context.Context, m MetricID, from, to time.Time) (string
 	}
 	return "", nil, errors.Join(errs...)
 }
+
+// Provides 返回某个已启用插件提供的指标；未启用时返回 nil。
+func (h *Hub) Provides(name string) []MetricID {
+	if s, ok := h.sources[name]; ok {
+		return s.Provides()
+	}
+	return nil
+}
+
+// FetchFrom 直接从指定插件取数（不走路由回退），用于插件管理页的测试调用。
+func (h *Hub) FetchFrom(ctx context.Context, name string, m MetricID, from, to time.Time) ([]Point, error) {
+	s, ok := h.sources[name]
+	if !ok {
+		return nil, fmt.Errorf("插件 %s 未启用", name)
+	}
+	return s.Fetch(ctx, m, from, to)
+}

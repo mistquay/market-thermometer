@@ -149,3 +149,21 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
+
+// PluginConfig 是 Web 上保存的外部插件设置（覆盖 config.yaml 中的 config）。
+type PluginConfig struct {
+	Enabled bool              `json:"enabled"`
+	Config  map[string]string `json:"config"`
+}
+
+// PluginConfig 读取插件设置；没有保存过时返回 false。
+func (s *Store) PluginConfig(ctx context.Context, id string) (PluginConfig, bool, error) {
+	var pc PluginConfig
+	ok, err := s.LoadJSON(ctx, "plugin:"+id, &pc)
+	return pc, ok, err
+}
+
+// SavePluginConfig 保存插件设置。
+func (s *Store) SavePluginConfig(ctx context.Context, id string, pc PluginConfig) error {
+	return s.SaveJSON(ctx, "plugin:"+id, pc)
+}

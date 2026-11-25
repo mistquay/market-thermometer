@@ -55,6 +55,20 @@ func NewRunner(st *store.Store, hub *ds.Hub, mkt market.Market, backfillStart ti
 	return &Runner{store: st, hub: hub, mkt: mkt, start: backfillStart, now: time.Now}
 }
 
+// SourceNames 返回已配置的个股日线源、场内基金日线源与场外基金净值源名称。
+func (r *Runner) SourceNames() (stocks, funds, fundNAV []string) {
+	for _, s := range r.stocks {
+		stocks = append(stocks, s.Name())
+	}
+	for _, s := range r.chain(ds.KindFund) {
+		funds = append(funds, s.Name())
+	}
+	for _, s := range r.fundNAV {
+		fundNAV = append(fundNAV, s.Name())
+	}
+	return
+}
+
 // Current 返回最近一个任务的状态快照（可能已结束）；从未运行过时返回 nil。
 func (r *Runner) Current() *Status {
 	r.mu.Lock()
@@ -242,4 +256,14 @@ func (r *Runner) syncOne(ctx context.Context, m ds.Metric, full bool, to time.Ti
 	}
 	r.logf("✓ %s：来自 %s，%d 条（%s）", m.Name, src, n, rangeText)
 	return nil
+}
+
+// TestStockSource 直接从指定个股数据源取一只证券的日线（插件管理页的测试调用）。
+func (r *Runner) TestStockSource(ctx context.Context, name, code, from string) ([]ds.StockBar, error) {
+	for _, s := range append(append([]ds.StockSource{}, r.stocks...), r.funds...) {
+		if s.Name() == name {
+			return s.Bars(ctx, code, from, "")
+		}
+	}
+	return nil, fmt.Errorf("个股数据源 %s 未启用", name)
 }

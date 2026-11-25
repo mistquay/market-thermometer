@@ -27,6 +27,8 @@ type Options struct {
 	TrustProxy   bool        // 是否信任反向代理传入的 X-Real-IP（用于登录限速）
 	Static       fs.FS       // 前端构建产物；为 nil 时不托管静态文件
 	Pusher       *job.Pusher // 推送；为 nil 时用直连、无代理的默认配置
+	// PluginOptions 是内置插件在 config.yaml 中的选项（插件 ID → 选项），管理页只读展示。
+	PluginOptions map[string]map[string]any
 }
 
 type Server struct {
@@ -78,6 +80,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/quality", s.auth(s.quality))
 	api.HandleFunc("POST /api/jobs/crosscheck", s.auth(s.startCrossCheck))
 	api.HandleFunc("POST /api/jobs/gapfill", s.auth(s.startGapFill))
+	api.HandleFunc("GET /api/plugins", s.auth(s.plugins))
+	api.HandleFunc("PUT /api/plugins/{kind}/{name}", s.auth(s.savePlugin))
+	api.HandleFunc("POST /api/plugins/{kind}/{name}/test", s.auth(s.testPlugin))
 	api.HandleFunc("GET /api/notify", s.auth(s.notifyState))
 	api.HandleFunc("POST /api/notify/settings", s.auth(s.saveNotifySettings))
 	api.HandleFunc("POST /api/notify/channels", s.auth(s.saveChannel))

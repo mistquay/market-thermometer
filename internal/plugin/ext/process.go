@@ -48,14 +48,15 @@ type Process struct {
 	spec     Spec
 	manifest plugin.Manifest
 
-	mu     sync.Mutex // 串行化调用
-	config map[string]string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	lines  chan []byte   // 读协程送来的 stdout 行；关闭表示进程已退出
-	done   chan struct{} // 进程被结束时关闭，让读协程退出
-	nextID int64
-	starts []time.Time
+	mu       sync.Mutex // 串行化调用
+	config   map[string]string
+	disabled bool
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	lines    chan []byte   // 读协程送来的 stdout 行；关闭表示进程已退出
+	done     chan struct{} // 进程被结束时关闭，让读协程退出
+	nextID   int64
+	starts   []time.Time
 
 	infoMu sync.Mutex // 保护以下状态（管理页读取，不能被长时间调用阻塞）
 	info   Status
@@ -120,7 +121,31 @@ func (p *Process) Call(ctx context.Context, method string, params, result any) e
 	return err
 }
 
+// ErrDisabled 表示插件已在 Web 上停用。
+var ErrDisabled = errors.New("插件已停用")
+
+// SetEnabled 启用或停用插件；停用时结束进程，之后的调用直接返回 ErrDisabled（指标路由会回退到下一个来源）。
+func (p *Process) SetEnabled(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.disabled = !on
+	if !on {
+		p.stopLocked()
+	}
+	p.setInfo(func(s *Status) { s.Disabled = !on })
+}
+
+// Config 返回当前下发给插件的配置。
+func (p *Process) Config() map[string]string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.config
+}
+
 func (p *Process) callLocked(ctx context.Context, method string, params, result any) error {
+	if p.disabled {
+		return ErrDisabled
+	}
 	if p.cmd == nil {
 		if err := p.startLocked(ctx); err != nil {
 			return err
@@ -297,6 +322,7 @@ func (p *Process) logStderr(line string) {
 // Status 是插件进程的运行状态。
 type Status struct {
 	Running   bool     `json:"running"`
+	Disabled  bool     `json:"disabled"`
 	PID       int      `json:"pid,omitempty"`
 	Starts    int      `json:"starts"` // 最近 10 分钟内的启动次数
 	LastError string   `json:"lastError,omitempty"`

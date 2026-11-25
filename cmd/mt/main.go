@@ -111,6 +111,10 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		}
 		p.SetConfig(pc.Config)
 		m := p.Manifest()
+		if saved, ok, err := st.PluginConfig(context.Background(), m.ID()); err == nil && ok { // Web 上保存的设置优先
+			p.SetConfig(saved.Config)
+			p.SetEnabled(saved.Enabled)
+		}
 		if m.Kind == plugin.KindMetric && len(enabled) > 0 {
 			enabled = append(enabled, m.Name)
 		}
@@ -201,7 +205,8 @@ func cmdServe(args []string) error {
 		Addr: a.cfg.Listen,
 		Handler: web.New(web.Options{
 			PasswordHash: a.cfg.AdminPasswordHash, TrustProxy: *trustProxy, Static: webui.FS(), StockSource: strings.Join(a.cfg.Stocks.SourceList(), " → "),
-			Pusher: pusher,
+			PluginOptions: builtinOptions(a.cfg),
+			Pusher:        pusher,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -222,6 +227,18 @@ func cmdServe(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// builtinOptions 汇总内置插件在 config.yaml 中的选项（插件管理页只读展示）。
+func builtinOptions(cfg *config.Config) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for name, o := range cfg.Sources.Options {
+		out[string(plugin.KindMetric)+"/"+name] = o
+	}
+	for name, o := range cfg.Stocks.Options {
+		out[string(plugin.KindStock)+"/"+name] = o
+	}
+	return out
 }
 
 // newPusher 构造推送：渠道默认直连；http_proxy 只给需要翻墙的渠道（Telegram）用。

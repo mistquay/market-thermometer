@@ -9,6 +9,7 @@ import Backtest from './Backtest'
 import Funds from './Funds'
 import Settings from './Settings'
 import Quality from './Quality'
+import Plugins from './Plugins'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -20,6 +21,7 @@ const PAGES = [
   { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
   { path: 'quality', label: '质量', el: () => <Quality /> },
+  { path: 'plugins', label: '插件', el: () => <Plugins /> },
   { path: 'settings', label: '设置', el: () => <Settings /> },
 ]
 

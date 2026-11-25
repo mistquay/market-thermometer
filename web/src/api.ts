@@ -150,7 +150,7 @@ export type ScoreSeries = {
   thresholds: { cheap: number; expensive: number; extreme: number }
 }
 
-export type NotifyField = { key: string; label: string; help?: string; secret?: boolean; required?: boolean }
+export type NotifyField = { key: string; label: string; help?: string; type?: string; secret?: boolean; required?: boolean }
 export type NotifyKind = { name: string; label: string; fields: NotifyField[] }
 export type NotifyChannel = { id: number; kind: string; kindLabel: string; name: string; config: Record<string, string>; enabled: boolean }
 export type NotifyLog = { key: string; title: string; result: string; sentAt: string }
@@ -173,6 +173,16 @@ export type QualityReport = {
   gaps: { code: string; missing: number; runs: QRun[] }[]
   crossCheck: { at: string; from: string; recentFrom: string; codes: string[]; sources: CrossSource[]; diffs: QDiff[] | null; truncated: boolean } | null
   elapsedMs: number
+}
+
+export type PluginInfo = {
+  id: string; name: string; kind: string; kindLabel: string; version: string; label: string; description?: string
+  builtin: boolean; enabled: boolean; state: string; editable: boolean; testable: boolean
+  metrics?: { id: string; name?: string; unit?: string }[]
+  capabilities?: string[]
+  config?: NotifyField[]
+  values: Record<string, string>
+  process?: { running: boolean; disabled: boolean; pid?: number; starts: number; lastError?: string; stderr: string[]; command: string[]; dir: string }
 }
 
 export class ApiError extends Error {
@@ -236,6 +246,11 @@ export const api = {
   quality: () => request<QualityReport>('GET', '/api/quality'),
   startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
   startGapFill: (source: string, codes: string[]) => request<JobStatus>('POST', '/api/jobs/gapfill', { source, codes }),
+  plugins: () => request<PluginInfo[]>('GET', '/api/plugins'),
+  savePlugin: (kind: string, name: string, body: { enabled: boolean; config: Record<string, string> }) =>
+    request<{ ok: boolean }>('PUT', `/api/plugins/${kind}/${name}`, body),
+  testPlugin: (kind: string, name: string) =>
+    request<{ target: string; count: number; elapsedMs: number; last?: unknown; error?: string }>('POST', `/api/plugins/${kind}/${name}/test`),
   notify: () => request<NotifyState>('GET', '/api/notify'),
   saveNotifySettings: (body: { signals?: boolean; weekly?: boolean }) => request<NotifyState>('POST', '/api/notify/settings', body),
   saveChannel: (id: number, c: ChannelInput) =>
