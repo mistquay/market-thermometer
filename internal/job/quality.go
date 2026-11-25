@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
+	"math/rand/v2"
 	"sort"
+	"strconv"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -21,7 +22,7 @@ const (
 	coverageDays      = 60   // 按日覆盖展示的交易日数
 	coverageRatio     = 0.95 // 低于中位数的该比例视为异常
 	recentTradingDays = 10   // 近期：数据源可能仍是临时值（与同步时往回重拉的范围一致）
-	maxGapStocks      = 100
+	maxGapStocks      = 1000
 )
 
 // Freshness 是一个数据项的最新日期与应有日期。
@@ -49,7 +50,7 @@ type QualityReport struct {
 	WindowFrom   string             `json:"windowFrom"`
 	GapStocks    int                `json:"gapStocks"`  // 有缺口的股票数
 	GapDays      int                `json:"gapDays"`    // 缺失的股票·交易日总数
-	Gaps         []StockGap         `json:"gaps"`       // 缺失最多的前 100 只
+	Gaps         []StockGap         `json:"gaps"`       // 缺失最多的前 1000 只
 	CrossCheck   *CrossCheckResult  `json:"crossCheck"` // 最近一次交叉核对
 	ElapsedMs    int64              `json:"elapsedMs"`
 }
@@ -301,30 +302,20 @@ func toQBars(bars []ds.StockBar, from string) []quality.Bar {
 	return out
 }
 
-// sampleStocks 从本地在市且有日线的股票中按日期确定性抽样（同一天结果相同），固定包含 600000。
+// sampleStocks 从本地在市且有日线的股票中随机抽样（以日期为种子，同一天结果相同），固定包含 600000。
 func (r *Runner) sampleStocks(ctx context.Context, now time.Time) ([]string, error) {
 	list, err := r.store.StockList(ctx)
 	if err != nil {
 		return nil, err
 	}
-	day := now.In(ds.Shanghai).Format("2006-01-02")
-	type cand struct {
-		code string
-		h    uint32
-	}
-	var cs []cand
+	var codes []string
 	for _, s := range list {
-		if s.Kind != ds.KindStock || s.Delisted || s.LastDate == "" || s.Code == "600000" {
-			continue
+		if s.Kind == ds.KindStock && !s.Delisted && s.LastDate != "" && s.Code != "600000" {
+			codes = append(codes, s.Code)
 		}
-		h := fnv.New32a()
-		h.Write([]byte(day + s.Code))
-		cs = append(cs, cand{s.Code, h.Sum32()})
 	}
-	sort.Slice(cs, func(i, j int) bool { return cs[i].h < cs[j].h })
-	out := []string{"600000"}
-	for _, c := range cs[:min(len(cs), crossSample)] {
-		out = append(out, c.code)
-	}
-	return out, nil
+	seed, _ := strconv.ParseUint(now.In(ds.Shanghai).Format("20060102"), 10, 64)
+	rnd := rand.New(rand.NewPCG(seed, seed))
+	rnd.Shuffle(len(codes), func(i, j int) { codes[i], codes[j] = codes[j], codes[i] })
+	return append([]string{"600000"}, codes[:min(len(codes), crossSample)]...), nil
 }

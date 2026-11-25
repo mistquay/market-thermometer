@@ -25,7 +25,7 @@ export type Series = { metric: string; source: string; points: Point[] }
 
 export type JobStatus = {
   id: number
-  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds'
+  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck'
   state: 'running' | 'done' | 'failed' | 'partial'
   total: number
   done: number
@@ -147,6 +147,24 @@ export type NotifyLog = { key: string; title: string; result: string; sentAt: st
 export type NotifyState = { kinds: NotifyKind[]; channels: NotifyChannel[]; logs: NotifyLog[]; signals: boolean; since: string; weekly: boolean }
 export type ChannelInput = { kind: string; name: string; config: Record<string, string>; enabled: boolean }
 
+export type QRun = { from: string; to: string; days: number }
+export type QDiff = { code: string; src: string; date: string; kind: string; local: number; source: number; recent: boolean }
+export type CrossSource = {
+  source: string; codes: number; compared: number; close: number; mult: number
+  onlySource: number; onlyLocal: number; recent: number; errors?: string[]; skipped?: string
+}
+export type QualityReport = {
+  calendarLast: string
+  freshness: { id: string; name: string; source: string; last: string; expected: string; behind: number }[]
+  coverage: { date: string; count: number; low: boolean }[] | null
+  windowFrom: string
+  gapStocks: number
+  gapDays: number
+  gaps: { code: string; missing: number; runs: QRun[] }[]
+  crossCheck: { at: string; from: string; recentFrom: string; codes: string[]; sources: CrossSource[]; diffs: QDiff[] | null; truncated: boolean } | null
+  elapsedMs: number
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -203,6 +221,8 @@ export const api = {
   fundNAV: (code: string) => request<FundNAV[]>('GET', `/api/funds/${code}/nav`),
   startFunds: () => request<JobStatus>('POST', '/api/jobs/funds'),
   jobs: () => request<JobRun[]>('GET', '/api/jobs'),
+  quality: () => request<QualityReport>('GET', '/api/quality'),
+  startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
   notify: () => request<NotifyState>('GET', '/api/notify'),
   saveNotifySettings: (body: { signals?: boolean; weekly?: boolean }) => request<NotifyState>('POST', '/api/notify/settings', body),
   saveChannel: (id: number, c: ChannelInput) =>

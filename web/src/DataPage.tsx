@@ -39,6 +39,7 @@ const JOB_TEXT: Record<string, string> = {
   breadth: '市场广度更新',
   'breadth-backfill': '回填市场广度',
   funds: '基金净值同步',
+  crosscheck: '交叉核对',
 }
 
 const STATE_TEXT: Record<JobStatus['state'], string> = {
