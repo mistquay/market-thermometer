@@ -16,14 +16,17 @@ import (
 
 	ds "market-thermometer/internal/datasource"
 	"market-thermometer/internal/job"
+	"market-thermometer/internal/market"
+	"market-thermometer/internal/notify"
 	"market-thermometer/internal/store"
 )
 
 type Options struct {
 	StockSource  string // 个股数据源名称（展示用）
 	PasswordHash string
-	TrustProxy   bool  // 是否信任反向代理传入的 X-Real-IP（用于登录限速）
-	Static       fs.FS // 前端构建产物；为 nil 时不托管静态文件
+	TrustProxy   bool        // 是否信任反向代理传入的 X-Real-IP（用于登录限速）
+	Static       fs.FS       // 前端构建产物；为 nil 时不托管静态文件
+	Pusher       *job.Pusher // 推送；为 nil 时用直连、无代理的默认配置
 }
 
 type Server struct {
@@ -31,6 +34,7 @@ type Server struct {
 	store   *store.Store
 	hub     *ds.Hub
 	runner  *job.Runner
+	pusher  *job.Pusher
 	limiter *loginLimiter
 
 	stockSource string // 个股数据源名称，仅用于展示
@@ -38,7 +42,12 @@ type Server struct {
 }
 
 func New(opt Options, st *store.Store, hub *ds.Hub, runner *job.Runner) *Server {
-	return &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, limiter: newLoginLimiter(), now: time.Now}
+	pusher := opt.Pusher
+	if pusher == nil {
+		c := &http.Client{Timeout: 30 * time.Second}
+		pusher = job.NewPusher(st, notify.Env{HTTP: c, Proxy: c}, market.CN)
+	}
+	return &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, pusher: pusher, limiter: newLoginLimiter(), now: time.Now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -65,6 +74,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("DELETE /api/funds/watch/{code}", s.auth(s.unwatchFund))
 	api.HandleFunc("GET /api/funds/{code}/nav", s.auth(s.fundNAV))
 	api.HandleFunc("POST /api/jobs/funds", s.auth(s.startFunds))
+	api.HandleFunc("GET /api/notify", s.auth(s.notifyState))
+	api.HandleFunc("POST /api/notify/settings", s.auth(s.saveNotifySettings))
+	api.HandleFunc("POST /api/notify/channels", s.auth(s.saveChannel))
+	api.HandleFunc("PUT /api/notify/channels/{id}", s.auth(s.saveChannel))
+	api.HandleFunc("DELETE /api/notify/channels/{id}", s.auth(s.deleteChannel))
+	api.HandleFunc("POST /api/notify/channels/{id}/test", s.auth(s.testChannel))
 	api.HandleFunc("GET /api/jobs/current", s.auth(s.currentJob))
 	api.HandleFunc("GET /api/jobs", s.auth(s.recentJobs))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

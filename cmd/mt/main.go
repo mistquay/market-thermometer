@@ -32,6 +32,11 @@ import (
 	_ "market-thermometer/internal/datasource/tencent"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
+	"market-thermometer/internal/notify"
+	_ "market-thermometer/internal/notify/dingtalk"
+	_ "market-thermometer/internal/notify/feishu"
+	_ "market-thermometer/internal/notify/telegram"
+	_ "market-thermometer/internal/notify/wecom"
 	"market-thermometer/internal/store"
 	"market-thermometer/internal/web"
 	"market-thermometer/internal/webui"
@@ -160,16 +165,16 @@ func cmdServe(args []string) error {
 	} else {
 		log.Printf("打分完成：参数 %s，%d 个交易日，最新 %s", res.Version, res.Days, res.Last.Date)
 	}
-	if a.cfg.HTTPProxy != "" {
-		if _, err := url.Parse(a.cfg.HTTPProxy); err != nil {
-			return fmt.Errorf("http_proxy: %w", err)
-		}
+	pusher, err := a.newPusher()
+	if err != nil {
+		return err
 	}
 
 	srv := &http.Server{
 		Addr: a.cfg.Listen,
 		Handler: web.New(web.Options{
 			PasswordHash: a.cfg.AdminPasswordHash, TrustProxy: *trustProxy, Static: webui.FS(), StockSource: strings.Join(a.cfg.Stocks.SourceList(), " → "),
+			Pusher: pusher,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -186,6 +191,20 @@ func cmdServe(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// newPusher 构造推送：渠道默认直连；http_proxy 只给需要翻墙的渠道（Telegram）用。
+func (a *app) newPusher() (*job.Pusher, error) {
+	direct := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	proxied := direct
+	if a.cfg.HTTPProxy != "" {
+		u, err := url.Parse(a.cfg.HTTPProxy)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("http_proxy 格式不对：%q", a.cfg.HTTPProxy)
+		}
+		proxied = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(u)}}
+	}
+	return job.NewPusher(a.store, notify.Env{HTTP: direct, Proxy: proxied}, market.CN), nil
 }
 
 func cmdSync(args []string) error {
