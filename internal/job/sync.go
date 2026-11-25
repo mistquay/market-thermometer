@@ -193,6 +193,12 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 	} else if len(r.stocks) > 0 {
 		r.logf("个股日线尚未回填，跳过市场广度（在数据页点击“回填市场广度”）")
 	}
+	// 证券名称（每周一次，供组合等页面展示；失败不影响同步结果）
+	if ctx.Err() == nil {
+		if err := r.refreshNames(ctx, false); err != nil {
+			r.logf("✗ 证券名称：%v", err)
+		}
+	}
 	// 自选场外基金净值
 	if len(r.fundNAV) > 0 && ctx.Err() == nil {
 		if err := r.syncFunds(ctx); err != nil {

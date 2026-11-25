@@ -84,6 +84,14 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate notify: %w", err)
 	}
+	if err := st.migrateSecurities(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate securities: %w", err)
+	}
+	if err := st.migratePortfolio(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate portfolio: %w", err)
+	}
 	return st, nil
 }
 
