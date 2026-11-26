@@ -323,3 +323,11 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 @media (max-width: 1000px) {
   .pf-layout, .pf-two { grid-template-columns: 1fr; }
 }
+
+/* 模拟交易 */
+.sim-order { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 16px 14px; }
+.sim-search { flex: 1; min-width: 240px; padding: 0; }
+.sim-note, .sim-select { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
+.sim-note { width: 180px; }
+.sim-select { min-width: 180px; }
+.sim-proxy { grid-template-columns: auto 90px; }

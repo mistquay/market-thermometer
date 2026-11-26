@@ -209,6 +209,27 @@ export type SecuritySeries = {
   peTtm?: (number | null)[]; pb?: (number | null)[]; extFrom?: string
 }
 
+export type SimParams = { commissionRate: number; minCommission: number; stampDuty: number; slippageBps: number; lotSize: number; expireDays: number; maxOrderAmount: number }
+export type SimAccount = { id: number; name: string; cash: number; start: string; params: SimParams; note: string; createdAt: string }
+export type SimOrder = {
+  id: number; code: string; kind: string; side: 'buy' | 'sell'; qty: number; placedDate: string; source: string; note?: string
+  status: 'pending' | 'filled' | 'rejected' | 'expired' | 'canceled'; fillDate?: string; fillPrice?: number; amount?: number; fee?: number; reason?: string
+}
+export type SimPosition = { code: string; kind: string; qty: number; cost: number; price: number; priceDate: string; value: number; pnl: number }
+export type SimView = {
+  account: SimAccount
+  state: { cash: number; positions: SimPosition[] | null; equity: number; realized: number; fees: number; curve: { date: string; equity: number; cash: number }[] | null; asOf: string }
+  orders: SimOrder[]
+  bench: number[] | null
+  names: Record<string, string>
+  cutoff: string
+}
+export type SimOrderInput = { code: string; side: 'buy' | 'sell'; qty: number; note?: string }
+export type SimPlan = {
+  plan: { targets: { Code: string; Kind: string; Weight: number }[]; orders: SimOrderInput[]; note: string }
+  strategy: { date: string; tier: string; base: number; overlay: number; weight: number; lastSignal?: string } | null
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -278,6 +299,13 @@ export const api = {
   savePortfolio: (p: PortfolioData) => (p.id ? request<PortfolioData>('PUT', `/api/portfolios/${p.id}`, p) : request<PortfolioData>('POST', '/api/portfolios', p)),
   deletePortfolio: (id: number) => request<{ ok: boolean }>('DELETE', `/api/portfolios/${id}`),
   analyzePortfolio: (id: number) => request<PortfolioAnalysis>('GET', `/api/portfolios/${id}/analysis`),
+  simAccounts: () => request<{ accounts: SimAccount[]; defaults: SimParams }>('GET', '/api/sim/accounts'),
+  createSimAccount: (a: { name: string; cash: number; start: string; params: SimParams }) => request<{ id: number }>('POST', '/api/sim/accounts', a),
+  simAccount: (id: number) => request<SimView>('GET', `/api/sim/accounts/${id}`),
+  deleteSimAccount: (id: number) => request<{ ok: boolean }>('DELETE', `/api/sim/accounts/${id}`),
+  placeSimOrders: (id: number, source: string, orders: SimOrderInput[]) => request<{ ids: number[] }>('POST', `/api/sim/accounts/${id}/orders`, { source, orders }),
+  cancelSimOrder: (id: number, oid: number) => request<{ ok: boolean }>('POST', `/api/sim/accounts/${id}/orders/${oid}/cancel`),
+  planSimRebalance: (id: number, body: { portfolioId?: number; strategyCode?: string }) => request<SimPlan>('POST', `/api/sim/accounts/${id}/rebalance`, body),
   plugins: () => request<PluginInfo[]>('GET', '/api/plugins'),
   savePlugin: (kind: string, name: string, body: { enabled: boolean; config: Record<string, string> }) =>
     request<{ ok: boolean }>('PUT', `/api/plugins/${kind}/${name}`, body),

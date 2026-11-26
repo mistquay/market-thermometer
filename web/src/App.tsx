@@ -12,6 +12,7 @@ import Quality from './Quality'
 import Plugins from './Plugins'
 import Portfolio from './Portfolio'
 import Quote from './Quote'
+import Sim from './Sim'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -22,6 +23,7 @@ const PAGES = [
   { path: 'backtest', label: '回测', el: () => <Backtest /> },
   { path: 'portfolio', label: '组合', el: () => <Portfolio /> },
   { path: 'quote', label: '行情', el: () => <Quote /> },
+  { path: 'sim', label: '模拟', el: () => <Sim /> },
   { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
   { path: 'quality', label: '质量', el: () => <Quality /> },
