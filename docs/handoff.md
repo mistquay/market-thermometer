@@ -42,7 +42,7 @@
 ### P1 收尾进度（2026-11-25 第二个会话更新）
 
 - 已完成：M5 推送（`internal/notify` 四个渠道 + `job.Pusher` + 设置页）、调度（`job.Scheduler`，`mt serve -schedule=false` 可关）、数据质量页（`internal/quality` + 质量页）、回测稳健性（`backtest.Perturb` / `Years` + 回测页面板）、部署文档 `docs/deploy.md`。
-- 场内基金只回填了 364 / 2,192 只，用户决定暂不回填（后续自己写脚本用不同 IP 获取后导入），本地 `skip_funds: true`；服务器不同步个股（deploy.md §6 方案 A）。
+- 2026-11-26 个股与场内基金改用通达信插件 `tdx`（用户同意）：本地 `sources: [tdx, stockdb, tencent]`、`fund_sources: [tdx]`。腾讯拉的 364 只基金日线已删除，改用 tdx 全量重拉；切换前的备份在 `data/backup/mt-before-tdx-20261126.db`。服务器同样用 tdx（deploy.md §6）。
 - P2 插件化（2026-11-25）、P3 投研（2026-11-26，财务报表除外）、P4 模拟交易（2026-11-26）已完成，见 roadmap §5。P5 实盘按用户决定暂不做，下一步可选 P6 多市场或回到温度计参数校准。
 - 用户 2026-11-25 说明：快速开发阶段功能优先，非必要的测试与决策自行处理，只有必须确认的才停下来问。跳过的验证记在下面的清单里，全部开发完后统一验证。
 
