@@ -2,6 +2,8 @@ package polymarket
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -90,4 +92,30 @@ func TestLive(t *testing.T) {
 		t.Fatalf("book %+v %v", b, err)
 	}
 	t.Logf("%s: bid %v ask %v; search[0]=%s", act[0].Slug, b.Bids[:min(1, len(b.Bids))], b.Asks[:min(1, len(b.Asks))], found[0].Slug)
+}
+
+func TestWinner(t *testing.T) {
+	for _, c := range []struct {
+		closed bool
+		uma    string
+		prices string
+		want   int
+	}{
+		{true, "resolved", `["0","1"]`, 1},
+		{true, "", `["1","0"]`, 0},              // 短期涨跌盘不走 UMA
+		{true, "proposed", `["1","0"]`, -1},     // UMA 未最终确认
+		{true, "", `["0.995","0.005"]`, -1},     // 已关闭但价格还没归 1 / 0
+		{false, "", `["1","0"]`, -1},            // 未关闭
+		{true, "resolved", `["0.5","0.5"]`, -1}, // 平局 / 作废
+		{true, "resolved", `["0","0","1"]`, 2},  // 多结果
+	} {
+		var m gammaMarket
+		js := fmt.Sprintf(`{"closed":%v,"umaResolutionStatus":%q,"outcomePrices":%q}`, c.closed, c.uma, c.prices)
+		if err := json.Unmarshal([]byte(js), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got := m.convert().Winner; got != c.want {
+			t.Errorf("%s: winner %d, want %d", js, got, c.want)
+		}
+	}
 }

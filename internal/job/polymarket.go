@@ -40,7 +40,7 @@ func NewPMSyncer(st *store.Store, src ds.PredictionSource, series []string, hist
 	if every <= 0 {
 		every = 10 * time.Minute
 	}
-	return &PMSyncer{store: st, src: src, series: series, historyDays: historyDays, every: every, maxHistory: 600, now: time.Now, logf: log.Printf}
+	return &PMSyncer{store: st, src: src, series: series, historyDays: historyDays, every: every, maxHistory: 2400, now: time.Now, logf: log.Printf}
 }
 
 // Configured 表示是否配置了数据源。
@@ -84,11 +84,13 @@ func (p *PMSyncer) SyncOnce(ctx context.Context) error {
 		p.mu.Unlock()
 	}()
 	budget := p.maxHistory
-	for _, s := range p.series {
+	for i, s := range p.series {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		n, h, err := p.syncSeries(ctx, s, &budget)
+		quota := budget / (len(p.series) - i) // 各系列平分，前面没用完的留给后面
+		n, h, err := p.syncSeries(ctx, s, quota)
+		budget -= h
 		if err != nil {
 			errs++
 			logf("✗ %s：%v", s, err)
@@ -119,7 +121,7 @@ func (p *PMSyncer) SyncOnce(ctx context.Context) error {
 }
 
 // syncSeries 拉取系列中新结算的事件与未结算事件，并为缺价格历史的已结算市场补历史。
-func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget *int) (events, hist int, err error) {
+func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget int) (events, hist int, err error) {
 	since, through, err := p.store.PMSeriesSync(ctx, series)
 	if err != nil {
 		return 0, 0, err
@@ -162,8 +164,22 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget *int) (
 	if err := p.store.SetPMSeriesSync(context.WithoutCancel(ctx), series, since, newest); err != nil {
 		return events, hist, err
 	}
+	// 已关闭但还没出结果的（刚结束、结算有延迟）：按 slug 批量刷新，每轮最多 60 个
+	pending, err := p.store.PMUnresolved(ctx, series, horizon, 60)
+	if err != nil {
+		return events, hist, err
+	}
+	for i := 0; i < len(pending); i += 20 {
+		evs, err := p.src.Events(ctx, ds.PMEventQuery{Slugs: pending[i:min(i+20, len(pending))], Limit: 20})
+		if err != nil {
+			return events, hist, err
+		}
+		if err := p.store.SavePMEvents(context.WithoutCancel(ctx), evs, p.now()); err != nil {
+			return events, hist, err
+		}
+	}
 	open := false
-	evs, err := p.src.Events(ctx, ds.PMEventQuery{Series: series, Closed: &open, Order: "endDate", Asc: true, Limit: 100})
+	evs, err := p.src.Events(ctx, ds.PMEventQuery{Series: series, Closed: &open, EndMin: p.now(), Order: "endDate", Asc: true, Limit: 100})
 	if err != nil {
 		return events, hist, err
 	}
@@ -180,7 +196,7 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget *int) (
 	var todo []ds.PMMarket
 	for _, e := range done {
 		for _, m := range e.Markets {
-			if len(todo) >= *budget {
+			if len(todo) >= budget {
 				break
 			}
 			if len(m.Tokens) == 0 || m.Start.IsZero() || len(m.Prices) == 0 {
@@ -195,18 +211,18 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget *int) (
 			}
 		}
 	}
-	*budget -= len(todo)
 	hist, err = p.fetchHistories(ctx, todo)
 	return events, hist, err
 }
 
 // fetchHistories 并发（4 路）拉取已结算市场第一个结果代币的 1 分钟价格历史并保存。
+// 单个市场失败只计数（下一轮会重试），累计 10 个失败才中止本系列。
 func (p *PMSyncer) fetchHistories(ctx context.Context, todo []ds.PMMarket) (int, error) {
 	jobs := make(chan ds.PMMarket)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
-	done := 0
+	done, failed := 0, 0
 	for range 4 {
 		wg.Add(1)
 		go func() {
@@ -221,10 +237,12 @@ func (p *PMSyncer) fetchHistories(ctx context.Context, todo []ds.PMMarket) (int,
 					err = p.store.SavePMPrices(context.WithoutCancel(ctx), m.Tokens[0], pts)
 				}
 				mu.Lock()
-				if err != nil && firstErr == nil {
-					firstErr = fmt.Errorf("%s 价格历史：%w", m.Slug, err)
-				}
-				if err == nil {
+				if err != nil {
+					failed++
+					if firstErr == nil {
+						firstErr = fmt.Errorf("%s 价格历史：%w", m.Slug, err)
+					}
+				} else {
 					done++
 				}
 				mu.Unlock()
@@ -233,7 +251,7 @@ func (p *PMSyncer) fetchHistories(ctx context.Context, todo []ds.PMMarket) (int,
 	}
 	for _, m := range todo {
 		mu.Lock()
-		stop := firstErr != nil
+		stop := failed >= 10
 		mu.Unlock()
 		if stop || ctx.Err() != nil {
 			break
@@ -242,10 +260,13 @@ func (p *PMSyncer) fetchHistories(ctx context.Context, todo []ds.PMMarket) (int,
 	}
 	close(jobs)
 	wg.Wait()
-	if firstErr == nil {
-		firstErr = ctx.Err()
+	if ctx.Err() != nil {
+		return done, ctx.Err()
 	}
-	return done, firstErr
+	if failed > 0 {
+		return done, fmt.Errorf("价格历史 %d 个失败（首个：%w）", failed, firstErr)
+	}
+	return done, nil
 }
 
 // syncWatched 刷新关注事件的元数据与各市场第一个结果代币的小时价格。

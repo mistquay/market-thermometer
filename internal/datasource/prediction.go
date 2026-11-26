@@ -55,10 +55,12 @@ type PMMarket struct {
 // PMEventQuery 是事件查询条件。
 type PMEventQuery struct {
 	Slug   string
+	Slugs  []string // 一次按多个 slug 取
 	Series string
 	Tag    string
 	Closed *bool
-	Order  string // 如 volume24hr、endDate
+	EndMin time.Time // 结束时间下限（零值不限），用来跳过早该结束却仍挂着 active 的陈旧事件
+	Order  string    // 如 volume24hr、endDate
 	Asc    bool
 	Limit  int // 每页最多 100
 	Offset int

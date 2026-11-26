@@ -157,11 +157,22 @@ func (m gammaMarket) convert() ds.PMMarket {
 		v, _ := strconv.ParseFloat(p, 64)
 		out.Prices = append(out.Prices, v)
 	}
-	if m.Closed && m.UMAStatus == "resolved" {
+	// 已结算：关闭、UMA 状态为空或 resolved（短期涨跌盘不走 UMA，状态为空），且价格恰为 1 / 0
+	if m.Closed && (m.UMAStatus == "" || m.UMAStatus == "resolved") {
+		win, settled := -1, true
 		for i, p := range out.Prices {
-			if p >= 0.99 {
-				out.Winner = i
+			switch {
+			case p >= 0.999:
+				if win >= 0 {
+					settled = false
+				}
+				win = i
+			case p > 0.001:
+				settled = false
 			}
+		}
+		if settled {
+			out.Winner = win
 		}
 	}
 	return out
@@ -219,7 +230,13 @@ func convertAll(raw []gammaEvent) []ds.PMEvent {
 func query(q ds.PMEventQuery) url.Values {
 	v := url.Values{}
 	if q.Slug != "" {
-		v.Set("slug", q.Slug)
+		v.Add("slug", q.Slug)
+	}
+	for _, s := range q.Slugs {
+		v.Add("slug", s)
+	}
+	if !q.EndMin.IsZero() {
+		v.Set("end_date_min", q.EndMin.UTC().Format(time.RFC3339))
 	}
 	if q.Series != "" {
 		v.Set("series_slug", q.Series)

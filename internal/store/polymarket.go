@@ -90,6 +90,8 @@ type PMEventQuery struct {
 	Slug   string
 	Closed *bool
 	From   int64 // 结束时间下限（Unix 秒），0 为不限
+	To     int64 // 结束时间上限（不含），0 为不限
+	Asc    bool  // 按结束时间升序（默认倒序）
 	Limit  int
 }
 
@@ -112,12 +114,20 @@ func (s *Store) PMEvents(ctx context.Context, q PMEventQuery) ([]ds.PMEvent, err
 		where += " AND end_t>=?"
 		args = append(args, q.From)
 	}
+	if q.To > 0 {
+		where += " AND end_t<?"
+		args = append(args, q.To)
+	}
 	if q.Limit <= 0 {
 		q.Limit = 1000
 	}
+	order := "DESC"
+	if q.Asc {
+		order = "ASC"
+	}
 	args = append(args, q.Limit)
 	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,title,series,tags,start_t,end_t,closed,neg_risk,volume,volume24h,liquidity
-		FROM pm_event WHERE `+where+` ORDER BY end_t DESC LIMIT ?`, args...)
+		FROM pm_event WHERE `+where+` ORDER BY end_t `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -189,14 +199,16 @@ type PMSeriesStats struct {
 	Series   string `json:"series"`
 	Events   int    `json:"events"`
 	Closed   int    `json:"closed"`
-	First    int64  `json:"first"`
+	First    int64  `json:"first"` // 已结算事件的结束时间范围
 	Last     int64  `json:"last"`
 	WithHist int    `json:"withHistory"` // 有价格历史的已结算市场数
+	Resolved int    `json:"resolved"`    // 已出结果的市场数
+	FirstWin int    `json:"firstWins"`   // 其中第一个结果（Up / Yes）获胜的个数
 }
 
 // PMSeriesStatsAll 汇总本地各系列。
 func (s *Store) PMSeriesStatsAll(ctx context.Context) ([]PMSeriesStats, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT e.series, COUNT(*), SUM(e.closed), MIN(e.end_t), MAX(e.end_t),
+	rows, err := s.db.QueryContext(ctx, `SELECT e.series, COUNT(*), SUM(e.closed), COALESCE(MIN(CASE WHEN e.closed=1 THEN e.end_t END),0), COALESCE(MAX(CASE WHEN e.closed=1 THEN e.end_t END),0),
 		SUM(EXISTS(SELECT 1 FROM pm_market m JOIN pm_price p ON p.token=json_extract(m.data,'$.tokens[0]') WHERE m.event_id=e.id))
 		FROM pm_event e WHERE e.series<>'' GROUP BY e.series ORDER BY e.series`)
 	if err != nil {
@@ -211,7 +223,31 @@ func (s *Store) PMSeriesStatsAll(ctx context.Context) ([]PMSeriesStats, error) {
 		}
 		out = append(out, x)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	wins, err := s.db.QueryContext(ctx, `SELECT e.series, SUM(m.winner>=0), SUM(m.winner=0) FROM pm_market m JOIN pm_event e ON e.id=m.event_id
+		WHERE e.series<>'' AND m.closed=1 GROUP BY e.series`)
+	if err != nil {
+		return nil, err
+	}
+	defer wins.Close()
+	idx := map[string]int{}
+	for i, x := range out {
+		idx[x.Series] = i
+	}
+	for wins.Next() {
+		var series string
+		var res, first int
+		if err := wins.Scan(&series, &res, &first); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[series]; ok {
+			out[i].Resolved, out[i].FirstWin = res, first
+		}
+	}
+	return out, wins.Err()
 }
 
 // SavePMPrices 写入代币价格历史（覆盖）。
@@ -263,6 +299,25 @@ func (s *Store) HasPMPrices(ctx context.Context, token string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM pm_price WHERE token=? LIMIT 1)`, token).Scan(&n)
 	return n > 0, err
+}
+
+// PMUnresolved 返回系列中已关闭但还没有赢家的事件 slug（结束时间 >= from，按结束时间倒序，最多 limit 个）。
+func (s *Store) PMUnresolved(ctx context.Context, series string, from int64, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT e.slug FROM pm_event e JOIN pm_market m ON m.event_id=e.id
+		WHERE e.series=? AND e.end_t>=? AND m.closed=1 AND m.winner<0 ORDER BY e.end_t DESC LIMIT ?`, series, from, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var x string
+		if err := rows.Scan(&x); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
 }
 
 // ---- 关注列表 ----
