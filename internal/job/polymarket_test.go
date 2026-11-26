@@ -18,6 +18,9 @@ type fakePM struct {
 	pages     int
 	failAfter int          // >0 时已结算事件翻到该偏移量就报错（模拟中途失败）
 	late      map[int]bool // 已过结束时间、但数据源还没标记关闭的事件
+	books     int          // Books 调用次数
+	bookHash  string
+	bookErr   error
 }
 
 func (f *fakePM) Name() string { return "fake" }
@@ -29,7 +32,11 @@ func (f *fakePM) event(i int) ds.PMEvent {
 	if closed {
 		m.Winner = 1
 	}
-	return ds.PMEvent{ID: fmt.Sprint(i), Slug: fmt.Sprintf("btc-updown-15m-%d", i), Series: "s", End: end, Closed: closed, Markets: []ds.PMMarket{m}}
+	ev := ds.PMEvent{ID: fmt.Sprint(i), Slug: fmt.Sprintf("btc-updown-15m-%d", i), Series: "s", End: end, Closed: closed, Markets: []ds.PMMarket{m}}
+	if closed {
+		ev.PriceToBeat = 60000 + float64(i) // 结束后才公布起始价
+	}
+	return ev
 }
 func (f *fakePM) Events(_ context.Context, q ds.PMEventQuery) ([]ds.PMEvent, error) {
 	f.pages++
@@ -70,6 +77,18 @@ func (f *fakePM) PriceHistory(_ context.Context, token string, from, to int64, _
 	return []ds.PricePoint{{T: from, P: 0.5}, {T: to, P: 0.01}}, nil
 }
 func (f *fakePM) Book(context.Context, string) (ds.Book, error) { return ds.Book{}, nil }
+func (f *fakePM) Books(_ context.Context, tokens []string) ([]ds.Book, error) {
+	f.books++
+	if f.bookErr != nil {
+		return nil, f.bookErr
+	}
+	out := []ds.Book{}
+	for _, t := range tokens {
+		out = append(out, ds.Book{Token: t, Time: f.now, Hash: f.bookHash,
+			Bids: []ds.BookLevel{{Price: 0.4, Size: 10}, {Price: 0.39, Size: 5}}, Asks: []ds.BookLevel{{Price: 0.41, Size: 7}}})
+	}
+	return out, nil
+}
 
 func TestPMSync(t *testing.T) {
 	ctx := context.Background()

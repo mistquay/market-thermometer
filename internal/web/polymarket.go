@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 
 	ds "market-thermometer/internal/datasource"
@@ -35,10 +36,16 @@ func (s *Server) pmState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	stats, err := s.store.PMSeriesStatsAll(ctx)
+	all, err := s.store.PMSeriesStatsAll(ctx)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	stats := []store.PMSeriesStats{} // 只列配置的系列（查看过的其他事件也会带着系列名存进本地）
+	for _, x := range all {
+		if slices.Contains(p.Series(), x.Series) {
+			stats = append(stats, x)
+		}
 	}
 	slugs, err := s.store.PMWatched(ctx)
 	if err != nil {
@@ -56,8 +63,35 @@ func (s *Server) pmState(w http.ResponseWriter, r *http.Request) {
 		}
 		watched = append(watched, e)
 	}
+	book := map[string]any{"configured": s.opt.PMBook.Configured()}
+	if s.opt.PMBook.Configured() {
+		bs, err := s.store.PMBookStatsAll(ctx)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		book["status"], book["stats"] = s.opt.PMBook.Status(), bs
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "source": p.Source().Name(), "series": p.Series(),
-		"status": p.Status(), "stats": stats, "watched": watched})
+		"status": p.Status(), "stats": stats, "watched": watched, "book": book})
+}
+
+// pmBooks 返回本地采集的盘口快照（Unix 毫秒区间，最多 5,000 条）。
+func (s *Server) pmBooks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	token := q.Get("token")
+	if !rePMToken.MatchString(token) {
+		writeErr(w, http.StatusBadRequest, "代币 ID 无效")
+		return
+	}
+	from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, _ := strconv.ParseInt(q.Get("to"), 10, 64)
+	snaps, err := s.store.PMBooks(r.Context(), token, from, to, 5000)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snaps)
 }
 
 // pmEvents 读取本地某系列事件：state=upcoming 为未结束（按结束时间升序），否则为已结算（倒序）。

@@ -165,8 +165,8 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget int) (e
 	if err := p.store.SetPMSeriesSync(context.WithoutCancel(ctx), series, since, newest); err != nil {
 		return events, hist, err
 	}
-	// 已关闭但还没出结果的、已过结束时间但本地仍是未关闭的：按 slug 批量刷新，每轮最多 60 个
-	pending, err := p.store.PMUnresolved(ctx, series, horizon, p.now().Unix(), 60)
+	// 已关闭但还没出结果 / 还没有起始价的、已过结束时间但本地仍是未关闭的：按 slug 批量刷新，每轮最多 400 个（20 次请求）
+	pending, err := p.store.PMUnresolved(ctx, series, horizon, p.now().Unix(), 400)
 	if err != nil {
 		return events, hist, err
 	}
@@ -174,6 +174,11 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget int) (e
 		evs, err := p.src.Events(ctx, ds.PMEventQuery{Slugs: pending[i:min(i+20, len(pending))], Limit: 20})
 		if err != nil {
 			return events, hist, err
+		}
+		for j := range evs { // 结束 1 小时后仍没有起始价：这个系列不提供，记 -1 不再刷新
+			if e := &evs[j]; e.Closed && e.PriceToBeat == 0 && e.End.Before(p.now().Add(-time.Hour)) {
+				e.PriceToBeat = -1
+			}
 		}
 		if err := p.store.SavePMEvents(context.WithoutCancel(ctx), evs, p.now()); err != nil {
 			return events, hist, err

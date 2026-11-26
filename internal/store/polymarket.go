@@ -29,8 +29,19 @@ CREATE TABLE IF NOT EXISTS pm_series_sync (series TEXT PRIMARY KEY, since INT NO
 `
 
 func (s *Store) migratePM() error {
-	_, err := s.db.Exec(pmSchema)
-	return err
+	if _, err := s.db.Exec(pmSchema); err != nil {
+		return err
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pm_event') WHERE name='price_to_beat'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE pm_event ADD COLUMN price_to_beat REAL NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	return s.migratePMBook()
 }
 
 func b2i(b bool) int {
@@ -50,10 +61,12 @@ func (s *Store) SavePMEvents(ctx context.Context, evs []ds.PMEvent, now time.Tim
 		return err
 	}
 	defer tx.Rollback()
-	es, err := tx.PrepareContext(ctx, `INSERT INTO pm_event(id,slug,title,series,tags,start_t,end_t,closed,neg_risk,volume,volume24h,liquidity,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug, title=excluded.title, series=excluded.series,
+	// 起始价只在事件结束后公布：新值为 0（没给）时保留旧值
+	es, err := tx.PrepareContext(ctx, `INSERT INTO pm_event(id,slug,title,series,tags,start_t,end_t,closed,neg_risk,volume,volume24h,liquidity,updated_at,price_to_beat)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug, title=excluded.title, series=excluded.series,
 		tags=excluded.tags, start_t=excluded.start_t, end_t=excluded.end_t, closed=excluded.closed, neg_risk=excluded.neg_risk,
-		volume=excluded.volume, volume24h=excluded.volume24h, liquidity=excluded.liquidity, updated_at=excluded.updated_at`)
+		volume=excluded.volume, volume24h=excluded.volume24h, liquidity=excluded.liquidity, updated_at=excluded.updated_at,
+		price_to_beat=CASE WHEN excluded.price_to_beat<>0 THEN excluded.price_to_beat ELSE pm_event.price_to_beat END`)
 	if err != nil {
 		return err
 	}
@@ -68,7 +81,7 @@ func (s *Store) SavePMEvents(ctx context.Context, evs []ds.PMEvent, now time.Tim
 	for _, e := range evs {
 		tags, _ := json.Marshal(e.Tags)
 		if _, err := es.ExecContext(ctx, e.ID, e.Slug, e.Title, e.Series, string(tags), e.Start.Unix(), e.End.Unix(), b2i(e.Closed), b2i(e.NegRisk),
-			e.Volume, e.Volume24h, e.Liquidity, ts(now)); err != nil {
+			e.Volume, e.Volume24h, e.Liquidity, ts(now), e.PriceToBeat); err != nil {
 			return err
 		}
 		for _, m := range e.Markets {
@@ -126,7 +139,7 @@ func (s *Store) PMEvents(ctx context.Context, q PMEventQuery) ([]ds.PMEvent, err
 		order = "ASC"
 	}
 	args = append(args, q.Limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,title,series,tags,start_t,end_t,closed,neg_risk,volume,volume24h,liquidity
+	rows, err := s.db.QueryContext(ctx, `SELECT id,slug,title,series,tags,start_t,end_t,closed,neg_risk,volume,volume24h,liquidity,price_to_beat
 		FROM pm_event WHERE `+where+` ORDER BY end_t `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -136,7 +149,7 @@ func (s *Store) PMEvents(ctx context.Context, q PMEventQuery) ([]ds.PMEvent, err
 		var e ds.PMEvent
 		var tags string
 		var st, en int64
-		if err := rows.Scan(&e.ID, &e.Slug, &e.Title, &e.Series, &tags, &st, &en, &e.Closed, &e.NegRisk, &e.Volume, &e.Volume24h, &e.Liquidity); err != nil {
+		if err := rows.Scan(&e.ID, &e.Slug, &e.Title, &e.Series, &tags, &st, &en, &e.Closed, &e.NegRisk, &e.Volume, &e.Volume24h, &e.Liquidity, &e.PriceToBeat); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -301,11 +314,13 @@ func (s *Store) HasPMPrices(ctx context.Context, token string) (bool, error) {
 	return n > 0, err
 }
 
-// PMUnresolved 返回系列中需要刷新的事件 slug：已关闭但还没有赢家的，或结束时间已过（< now）但本地仍未关闭的。
+// PMUnresolved 返回系列中需要刷新的事件 slug：已关闭但还没有赢家的、结束时间已过（< now）但本地仍未关闭的、
+// 已关闭但还没有起始价的（price_to_beat=0；没有起始价的系列结束很久后记为 -1，不再刷新）。
 // 只看结束时间 >= from 的，按结束时间倒序，最多 limit 个。
 func (s *Store) PMUnresolved(ctx context.Context, series string, from, now int64, limit int) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT e.slug FROM pm_event e WHERE e.series=? AND e.end_t>=? AND (
-		(e.closed=0 AND e.end_t<?) OR EXISTS(SELECT 1 FROM pm_market m WHERE m.event_id=e.id AND m.closed=1 AND m.winner<0))
+		(e.closed=0 AND e.end_t<?) OR (e.closed=1 AND e.price_to_beat=0)
+		OR EXISTS(SELECT 1 FROM pm_market m WHERE m.event_id=e.id AND m.closed=1 AND m.winner<0))
 		ORDER BY e.end_t DESC LIMIT ?`, series, from, now, limit)
 	if err != nil {
 		return nil, err

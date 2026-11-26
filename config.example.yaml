@@ -72,6 +72,11 @@ crypto:
 polymarket:
   source: polymarket
   series: [btc-up-or-down-5m, btc-up-or-down-15m, btc-up-or-down-hourly, eth-up-or-down-5m, eth-up-or-down-15m, eth-up-or-down-hourly]
-  history_days: 14                 # 系列首次回溯天数（每轮最多补 600 个市场的价格历史，首次回填分多轮完成）
+  history_days: 14                 # 系列首次回溯天数（每轮最多补 2,400 个市场的价格历史，首次回填分多轮完成）
   every_min: 10
   proxy: false
+  book:                           # 盘口采集：每个系列当前与下一个市场的订单簿 + 同时刻币安现货价（every_ms 为 0 时不采）
+    every_ms: 2500
+    levels: 10                     # 每边保存的档数
+    keep_days: 14                  # 保留天数
+    # series: [btc-up-or-down-5m]  # 默认与上面的 series 相同

@@ -33,6 +33,15 @@ type Polymarket struct {
 	HistoryDays int      `yaml:"history_days"` // 系列已结算事件首次回溯天数，默认 30
 	EveryMin    int      `yaml:"every_min"`    // 同步间隔（分钟），默认 10
 	Proxy       bool     `yaml:"proxy"`        // 经 http_proxy 访问
+	Book        PMBook   `yaml:"book"`
+}
+
+// PMBook 是盘口采集配置：EveryMs 为 0 时不采集。
+type PMBook struct {
+	EveryMs  int      `yaml:"every_ms"`  // 采集间隔（毫秒），如 2500
+	Levels   int      `yaml:"levels"`    // 每边保存的档数，默认 10
+	KeepDays int      `yaml:"keep_days"` // 保留天数，默认 14
+	Series   []string `yaml:"series"`    // 采集的系列，默认与 series 相同
 }
 
 // Crypto 是加密货币行情配置。Sources 按顺序回退；为空时不同步。

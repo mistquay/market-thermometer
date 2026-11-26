@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,11 +16,12 @@ import (
 
 const eventJSON = `[{"id":"1","slug":"btc-updown-15m-1795671000","title":"Bitcoin Up or Down","seriesSlug":"btc-up-or-down-15m",
 "tags":[{"slug":"crypto"}],"startDate":"2026-11-25T05:00:00Z","endDate":"2026-11-26T05:45:00Z","closed":true,"negRisk":false,
-"volume":12784.2,"volume24hr":"100","liquidity":"0",
+"volume":12784.2,"volume24hr":"100","liquidity":"0","eventMetadata":{"priceToBeat":60496.41636499259},
 "markets":[{"conditionId":"0xabc","slug":"btc-updown-15m-1795671000","question":"Bitcoin Up or Down","outcomes":"[\"Up\", \"Down\"]",
 "clobTokenIds":"[\"111\", \"222\"]","outcomePrices":"[\"0\", \"1\"]","bestBid":0.001,"bestAsk":"0.999","volumeNum":12784.2,
 "eventStartTime":"2026-11-26T05:30:00Z","endDate":"2026-11-26T05:45:00Z","closed":true,"acceptingOrders":false,
-"orderPriceMinTickSize":0.01,"orderMinSize":5,"feeType":"crypto_btc_5m_15m_fees","umaResolutionStatus":"resolved"}]}]`
+"orderPriceMinTickSize":0.01,"orderMinSize":5,"feeType":"crypto_btc_5m_15m_fees","umaResolutionStatus":"resolved",
+"feesEnabled":true,"feeSchedule":{"exponent":1,"rate":0.05,"takerOnly":true,"rebateRate":0.2}}]}]`
 
 func TestEventsBookHistory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +33,13 @@ func TestEventsBookHistory(t *testing.T) {
 			w.Write([]byte(eventJSON))
 		case r.URL.Path == "/book":
 			w.Write([]byte(`{"asset_id":"111","timestamp":"1795673391930","bids":[{"price":"0.40","size":"10"},{"price":"0.45","size":"5"}],"asks":[{"price":"0.60","size":"3"},{"price":"0.55","size":"7"}]}`))
+		case r.URL.Path == "/books" && r.Method == http.MethodPost:
+			var req []map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req) != 2 || req[1]["token_id"] != "333" {
+				t.Errorf("books body %v %v", req, err)
+			}
+			w.Write([]byte(`[{"asset_id":"333","timestamp":"1795673391930","hash":"h3","bids":[],"asks":[{"price":"0.2","size":"1"}]},
+				{"asset_id":"111","timestamp":"1795673391930","hash":"h1","bids":[{"price":"0.4","size":"2"}],"asks":[]}]`))
 		case r.URL.Path == "/prices-history":
 			w.Write([]byte(`{"history":[{"t":20,"p":0.6},{"t":10,"p":0.5}]}`))
 		}
@@ -50,6 +59,13 @@ func TestEventsBookHistory(t *testing.T) {
 	b, err := s.Book(context.Background(), "111")
 	if err != nil || b.Bids[0].Price != 0.45 || b.Asks[0].Price != 0.55 {
 		t.Fatalf("book %+v %v", b, err)
+	}
+	if evs[0].PriceToBeat != 60496.41636499259 || m.FeeRate != 0.05 || m.FeeExp != 1 || math.Abs(m.TakerFee(0.5, 100)-1.25) > 1e-9 {
+		t.Fatalf("ptb / fee: %v %v %v %v", evs[0].PriceToBeat, m.FeeRate, m.FeeExp, m.TakerFee(0.5, 100))
+	}
+	bs, err := s.Books(context.Background(), []string{"111", "333"})
+	if err != nil || len(bs) != 2 || bs[0].Token != "333" || bs[0].Hash != "h3" || bs[1].Bids[0].Size != 2 {
+		t.Fatalf("books %+v %v", bs, err)
 	}
 	h, err := s.PriceHistory(context.Background(), "111", 0, 30, 1)
 	if err != nil || len(h) != 2 || h[0].T != 10 {

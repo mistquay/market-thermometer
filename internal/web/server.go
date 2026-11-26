@@ -29,8 +29,9 @@ type Options struct {
 	Pusher       *job.Pusher // 推送；为 nil 时用直连、无代理的默认配置
 	// PluginOptions 是内置插件在 config.yaml 中的选项（插件 ID → 选项），管理页只读展示。
 	PluginOptions map[string]map[string]any
-	Crypto        *job.CryptoSyncer // 加密行情同步器；为 nil 时加密页显示未配置
-	PM            *job.PMSyncer     // Polymarket 同步器；为 nil 时预测市场页显示未配置
+	Crypto        *job.CryptoSyncer    // 加密行情同步器；为 nil 时加密页显示未配置
+	PM            *job.PMSyncer        // Polymarket 同步器；为 nil 时预测市场页显示未配置
+	PMBook        *job.PMBookCollector // 盘口采集器；为 nil 时不采集
 }
 
 type Server struct {
@@ -117,6 +118,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/pm/search", s.auth(s.pmSearch))
 	api.HandleFunc("GET /api/pm/prices", s.auth(s.pmPrices))
 	api.HandleFunc("GET /api/pm/book", s.auth(s.pmBook))
+	api.HandleFunc("GET /api/pm/books", s.auth(s.pmBooks))
 	api.HandleFunc("POST /api/pm/watch", s.auth(s.pmWatch))
 	api.HandleFunc("DELETE /api/pm/watch/{slug}", s.auth(s.pmUnwatch))
 	api.HandleFunc("POST /api/pm/sync", s.auth(s.startPMSync))

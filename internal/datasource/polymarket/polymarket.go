@@ -11,9 +11,11 @@
 package polymarket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -48,6 +50,10 @@ type Source struct {
 func (s *Source) Name() string { return Name }
 
 func (s *Source) get(ctx context.Context, u string, v any) error {
+	return s.do(ctx, http.MethodGet, u, nil, v)
+}
+
+func (s *Source) do(ctx context.Context, method, u string, payload any, v any) error {
 	s.mu.Lock()
 	wait := time.Until(s.next)
 	s.next = time.Now().Add(max(wait, 0) + 50*time.Millisecond)
@@ -59,7 +65,13 @@ func (s *Source) get(ctx context.Context, u string, v any) error {
 		case <-time.After(wait):
 		}
 	}
-	body, err := ds.GetBody(ctx, s.http, u, nil)
+	var body []byte
+	var err error
+	if method == http.MethodGet {
+		body, err = ds.GetBody(ctx, s.http, u, nil)
+	} else {
+		body, err = s.post(ctx, u, payload)
+	}
 	if err != nil {
 		return fmt.Errorf("polymarket: %w", err)
 	}
@@ -125,7 +137,12 @@ type gammaMarket struct {
 	TickSize       flt     `json:"orderPriceMinTickSize"`
 	MinSize        flt     `json:"orderMinSize"`
 	FeeType        string  `json:"feeType"`
-	UMAStatus      string  `json:"umaResolutionStatus"`
+	FeesEnabled    bool    `json:"feesEnabled"`
+	FeeSchedule    *struct {
+		Rate     flt `json:"rate"`
+		Exponent flt `json:"exponent"`
+	} `json:"feeSchedule"`
+	UMAStatus string `json:"umaResolutionStatus"`
 }
 
 type gammaEvent struct {
@@ -141,7 +158,10 @@ type gammaEvent struct {
 	Volume     flt                     `json:"volume"`
 	Volume24hr flt                     `json:"volume24hr"`
 	Liquidity  flt                     `json:"liquidity"`
-	Markets    []gammaMarket           `json:"markets"`
+	Metadata   *struct {
+		PriceToBeat flt `json:"priceToBeat"`
+	} `json:"eventMetadata"`
+	Markets []gammaMarket `json:"markets"`
 }
 
 func (m gammaMarket) convert() ds.PMMarket {
@@ -152,6 +172,9 @@ func (m gammaMarket) convert() ds.PMMarket {
 		TickSize: float64(m.TickSize), MinSize: float64(m.MinSize), FeeType: m.FeeType, Winner: -1, Resolution: m.UMAStatus}
 	if out.Start.IsZero() {
 		out.Start = ts(m.StartDate)
+	}
+	if m.FeesEnabled && m.FeeSchedule != nil {
+		out.FeeRate, out.FeeExp = float64(m.FeeSchedule.Rate), float64(m.FeeSchedule.Exponent)
 	}
 	for _, p := range m.Prices {
 		v, _ := strconv.ParseFloat(p, 64)
@@ -183,6 +206,9 @@ func (e gammaEvent) convert() ds.PMEvent {
 		Closed: e.Closed, NegRisk: e.NegRisk, Volume: float64(e.Volume), Volume24h: float64(e.Volume24hr), Liquidity: float64(e.Liquidity), Tags: []string{}}
 	for _, t := range e.Tags {
 		out.Tags = append(out.Tags, t.Slug)
+	}
+	if e.Metadata != nil {
+		out.PriceToBeat = float64(e.Metadata.PriceToBeat)
 	}
 	for _, m := range e.Markets {
 		out.Markets = append(out.Markets, m.convert())
@@ -295,23 +321,75 @@ func (s *Source) PriceHistory(ctx context.Context, token string, from, to int64,
 	return r.History, nil
 }
 
-func (s *Source) Book(ctx context.Context, token string) (ds.Book, error) {
-	var r struct {
-		AssetID   string `json:"asset_id"`
-		Timestamp flt    `json:"timestamp"`
-		Bids      []struct {
-			Price flt `json:"price"`
-			Size  flt `json:"size"`
-		} `json:"bids"`
-		Asks []struct {
-			Price flt `json:"price"`
-			Size  flt `json:"size"`
-		} `json:"asks"`
+func (s *Source) post(ctx context.Context, u string, payload any) ([]byte, error) {
+	js, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(js))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d: %.200s", resp.StatusCode, body)
+	}
+	return body, nil
+}
+
+type clobBook struct {
+	AssetID   string `json:"asset_id"`
+	Timestamp flt    `json:"timestamp"`
+	Hash      string `json:"hash"`
+	Bids      []struct {
+		Price flt `json:"price"`
+		Size  flt `json:"size"`
+	} `json:"bids"`
+	Asks []struct {
+		Price flt `json:"price"`
+		Size  flt `json:"size"`
+	} `json:"asks"`
+}
+
+func (s *Source) Book(ctx context.Context, token string) (ds.Book, error) {
+	var r clobBook
 	if err := s.get(ctx, s.clob+"/book?token_id="+url.QueryEscape(token), &r); err != nil {
 		return ds.Book{}, err
 	}
-	b := ds.Book{Token: token, Time: time.UnixMilli(int64(r.Timestamp))}
+	return r.convert(token), nil
+}
+
+// Books 用 POST /books 一次取多个代币的订单簿。
+func (s *Source) Books(ctx context.Context, tokens []string) ([]ds.Book, error) {
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	req := make([]map[string]string, len(tokens))
+	for i, t := range tokens {
+		req[i] = map[string]string{"token_id": t}
+	}
+	var raw []clobBook
+	if err := s.do(ctx, http.MethodPost, s.clob+"/books", req, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]ds.Book, 0, len(raw))
+	for _, r := range raw {
+		out = append(out, r.convert(r.AssetID))
+	}
+	return out, nil
+}
+
+func (r clobBook) convert(token string) ds.Book {
+	b := ds.Book{Token: token, Time: time.UnixMilli(int64(r.Timestamp)), Hash: r.Hash}
 	for _, l := range r.Bids {
 		b.Bids = append(b.Bids, ds.BookLevel{Price: float64(l.Price), Size: float64(l.Size)})
 	}
@@ -320,5 +398,5 @@ func (s *Source) Book(ctx context.Context, token string) (ds.Book, error) {
 	}
 	sort.Slice(b.Bids, func(i, j int) bool { return b.Bids[i].Price > b.Bids[j].Price })
 	sort.Slice(b.Asks, func(i, j int) bool { return b.Asks[i].Price < b.Asks[j].Price })
-	return b, nil
+	return b
 }
