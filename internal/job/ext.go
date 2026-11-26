@@ -26,7 +26,8 @@ func (r *Runner) collectExt(ctx context.Context) error {
 	return nil
 }
 
-// ExtBackfillFrom 是扩展字段回填的默认起点：约 10 年，够 K 线与估值分位使用，库体积约增加数百 MB。
+// ExtBackfillFrom 是扩展字段回填的默认起点：约 10 年，够 K 线与估值分位使用。
+// 实测（2026-11-26）：5,474 只股票、1,161 万行，stockdb 回填 3 分钟，库体积增加约 1.2 GB。
 const ExtBackfillFrom = "2015-01-01"
 
 // StartExtBackfill 在后台从第一个提供扩展字段的个股数据源（stockdb）回填 A 股的扩展字段。

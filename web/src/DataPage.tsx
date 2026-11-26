@@ -115,7 +115,7 @@ export default function DataPage() {
   }
 
   async function startExt() {
-    if (!confirm('从本地 stockdb 逐只读取 2015 年以来 A 股的开高低收、成交量、PE / PB、市值，供行情页 K 线与估值使用。需要 stockdb.exe 已启动；数据库约增加几百 MB；已回填的会跳过。确定开始？')) return
+    if (!confirm('从本地 stockdb 逐只读取 2015 年以来 A 股的开高低收、成交量、PE / PB、市值，供行情页 K 线与估值使用。需要 stockdb.exe 已启动；全部回填约 3 分钟，数据库约增加 1.2 GB；已回填的会跳过。确定开始？')) return
     setError('')
     try {
       setJob(await api.startExtBackfill())
