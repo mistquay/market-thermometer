@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { api, type SecurityHit, type SecuritySeries } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
+import { RENDERERS, useKlineRenderer, type KlineData } from './kline/kline'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 const MAS = [20, 60, 250]
@@ -72,66 +73,22 @@ export default function Quote() {
   const modeText = data?.kind === 'ofund' ? (mode === 'none' ? '单位净值' : '累计净值') : mode === 'qfq' ? '前复权' : mode === 'hfq' ? '后复权' : '不复权'
   const hasK = !!data?.high
 
-  const option = useMemo<EChartsOption | null>(() => {
+  // 与图表库无关的 K 线数据：开高低按当日复权比例（复权价 ÷ 不复权收盘）换算
+  const kline = useMemo<KlineData | null>(() => {
     if (!data || data.dates.length === 0) return null
-    const ink = cssVar('--ink-2'), line = cssVar('--line')
     const colors = [cssVar('--t-hot-1'), cssVar('--t-cold-2'), cssVar('--dim-2')]
-    const up = '#d8453b', down = '#1f8a4c'
-    const mas = data.kind === 'ofund' ? [] : MAS.map((n, i) => ({ name: `MA${n}`, type: 'line', data: sma(prices, n), showSymbol: false,
-      lineStyle: { width: 1, color: colors[i] }, itemStyle: { color: colors[i] } }))
-    const zoom = { start: 85, end: 100 }
-    if (hasK) {
-      // K 线：后复权模式下按当日复权比例（后复权价 ÷ 不复权收盘）缩放 OHLC
-      const k = data.dates.map((_, i) => {
-        const o = data.open![i], h = data.high![i], l = data.low![i]
-        if (o === null || h === null || l === null) return ['-', '-', '-', '-']
-        const f = prices[i] / data.close[i] // 当日复权比例（不复权时为 1）
-        return [o * f, prices[i], l * f, h * f]
-      })
-      const vols = data.dates.map((_, i) => {
-        const v = data.volume![i]
-        if (v === null) return null
-        const o = data.open![i] ?? prices[i]
-        return { value: v / 100, itemStyle: { color: data.close[i] >= (o ?? 0) ? up : down } }
-      })
-      return {
-        animation: false,
-        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-        legend: { top: 0, left: 0, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
-        axisPointer: { link: [{ xAxisIndex: 'all' }] },
-        grid: [{ left: 64, right: 24, top: 32, height: '62%' }, { left: 64, right: 24, top: '76%', bottom: 48 }],
-        xAxis: [
-          { type: 'category', data: data.dates, axisLine: { lineStyle: { color: line } }, axisLabel: { show: false } },
-          { type: 'category', gridIndex: 1, data: data.dates, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-        ],
-        yAxis: [
-          { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-          { type: 'value', gridIndex: 1, splitLine: { show: false }, axisLabel: { color: ink, formatter: (v: number) => (v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : `${v}`) } },
-        ],
-        dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], ...zoom }, { type: 'slider', xAxisIndex: [0, 1], height: 16, bottom: 8, borderColor: line, textStyle: { color: ink }, ...zoom }],
-        series: [
-          { name: `K 线（${modeText}）`, type: 'candlestick', data: k,
-            itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
-          ...mas,
-          { name: '成交量（手）', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: vols },
-        ],
-      }
-    }
+    const scaled = (xs: (number | null)[] | undefined) =>
+      hasK && xs ? xs.map((x, i) => (x === null ? null : (x * prices[i]) / data.close[i])) : null
     return {
-      animation: false,
-      grid: { left: 64, right: 24, top: 36, bottom: 56 },
-      tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(3) : '—') },
-      legend: { top: 0, left: 0, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
-      xAxis: { type: 'category', data: data.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      dataZoom: [{ type: 'inside', start: 70 }, { type: 'slider', height: 18, bottom: 8, start: 70, borderColor: line, textStyle: { color: ink } }],
-      series: [
-        { name: data.kind === 'ofund' ? modeText : `收盘（${modeText}）`, type: 'line', data: prices, showSymbol: false,
-          lineStyle: { width: 1.6, color: cssVar('--accent') }, itemStyle: { color: cssVar('--accent') } },
-        ...mas,
-      ],
+      dates: data.dates,
+      close: prices,
+      open: scaled(data.open), high: scaled(data.high), low: scaled(data.low),
+      volume: hasK ? data.volume ?? null : null,
+      lines: data.kind === 'ofund' ? [] : MAS.map((n, i) => ({ name: `MA${n}`, color: colors[i], data: sma(prices, n) })),
+      title: hasK ? `K 线（${modeText}）` : data.kind === 'ofund' ? modeText : `收盘（${modeText}）`,
     }
   }, [data, prices, modeText, hasK])
+  const [renderer, setRenderer] = useKlineRenderer()
 
   const valuation = useMemo(() => {
     if (!data?.peTtm || !data.pb) return null
@@ -208,6 +165,11 @@ export default function Quote() {
               </span>
             )}
             <span style={{ flex: 1 }} />
+            <div className="seg" title="图表组件（记在本浏览器）">
+              {RENDERERS.map((r) => (
+                <button key={r.id} className={r.id === renderer.id ? 'on' : ''} onClick={() => setRenderer(r.id)}>{r.label}</button>
+              ))}
+            </div>
             <div className="seg">
               {data.kind === 'ofund' ? (
                 <>
@@ -223,7 +185,11 @@ export default function Quote() {
               )}
             </div>
           </div>
-          {option ? <EChart option={option} height={hasK ? 520 : 460} /> : <div className="empty">本地没有这只证券的数据。</div>}
+          {kline ? (
+            <Suspense fallback={<div className="empty" style={{ height: hasK ? 520 : 460 }}>加载图表…</div>}>
+              <renderer.Component data={kline} height={hasK ? 520 : 460} />
+            </Suspense>
+          ) : <div className="empty">本地没有这只证券的数据。</div>}
           {data.kind === 'stock' && !hasK && n > 0 && <p className="disclaimer" style={{ padding: '0 16px 12px' }}>没有扩展数据（K 线、成交量、估值）：在数据页回填扩展字段，或运行 mt ext-backfill。</p>}
         </section>
       )}
