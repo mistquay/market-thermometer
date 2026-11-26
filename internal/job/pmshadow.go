@@ -318,7 +318,7 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 		return e
 	}
 	p.sigmaOf[t.Symbol] = sigma
-	if k.src != "exact" && now.Sub(t.Start) >= 5*time.Minute {
+	if k.src != "exact" {
 		p.fetchStartPrice(a, t.Start.Unix(), now)
 	}
 	r, ok := pmstrat.ProbUp(pmstrat.Inputs{Now: now.Unix(), Start: t.Start.Unix(), End: t.End.Unix(), K: k.k, KErrBp: k.errBp,
@@ -344,10 +344,19 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 	return e
 }
 
-// fetchStartPrice 在后台按 slug 补拉同一时刻开始的 5m 事件（结束后才公布起始价），拿到后存入本地，下一轮即用精确值。
+// fetchStartPrice 在后台按 slug 补拉同一时刻开始的事件，拿到起始价后存入本地，下一轮即用精确值：
+//   - 整点开始的：1 小时盘在开始后几分钟内就公布起始价（实测约 3 分钟内），开始 1 分钟后起每 10 秒查一次；
+//   - 其余：5m 盘结束后才公布，开始 5 分钟后起每 10 秒查一次。
+//
 // 同一事件同时只有一个请求；调用方持有 p.mu。
 func (p *PMShadow) fetchStartPrice(asset string, start int64, now time.Time) {
-	slug := fmt.Sprintf("%s-updown-5m-%d", asset, start)
+	slug, ready := fmt.Sprintf("%s-updown-5m-%d", asset, start), start+300
+	if start%3600 == 0 {
+		slug, ready = fmt.Sprintf("%s-updown-1h-%d", asset, start), start+60
+	}
+	if now.Unix() < ready {
+		return
+	}
 	key := slug + "@" + now.Truncate(10*time.Second).String() // 每个事件每 10 秒最多一次
 	if p.src == nil || p.fetching[slug] || p.fetching[key] {
 		return
@@ -371,7 +380,7 @@ func (p *PMShadow) fetchStartPrice(asset string, start int64, now time.Time) {
 		}
 		if found && err == nil {
 			delete(p.kCache, fmt.Sprintf("%s/%d", asset, start))
-			p.ptbLag = append(p.ptbLag, p.now().Sub(time.Unix(start+300, 0)).Seconds())
+			p.ptbLag = append(p.ptbLag, p.now().Sub(time.Unix(ready, 0)).Seconds())
 			if len(p.ptbLag) > 50 {
 				p.ptbLag = p.ptbLag[len(p.ptbLag)-50:]
 			}
@@ -389,7 +398,7 @@ type PMShadowStatus struct {
 	BasisN   map[string]int     `json:"basisN"`
 	Sigma    map[string]float64 `json:"sigma"` // 每 √秒
 	BasisErr map[string]float64 `json:"basisErr"`
-	PTBLag   float64            `json:"ptbLag"` // 起始价公布延迟的中位数（秒），0 为还没有样本
+	PTBLag   float64            `json:"ptbLag"` // 可以开始查询到取到起始价的延迟中位数（秒），0 为还没有样本
 	LastTick time.Time          `json:"lastTick,omitzero"`
 	LastErr  string             `json:"lastErr,omitempty"`
 	ErrAt    time.Time          `json:"errAt,omitzero"`
