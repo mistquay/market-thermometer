@@ -37,7 +37,8 @@ function fromHash(): { kind: string; code: string } | null {
 export default function Quote() {
   const [target, setTarget] = useState(fromHash)
   const [data, setData] = useState<SecuritySeries | null>(null)
-  const [adjusted, setAdjusted] = useState(true)
+  // 复权方式：前复权（默认，最新价与实际一致）、后复权（上市以来真实涨幅）、不复权；场外基金为累计 / 单位净值
+  const [mode, setMode] = useState<'qfq' | 'hfq' | 'none'>('qfq')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SecurityHit[]>([])
   const [error, setError] = useState('')
@@ -58,7 +59,17 @@ export default function Quote() {
     return () => clearTimeout(t)
   }, [q])
 
-  const prices = useMemo(() => (data ? (adjusted ? data.adjusted : data.close) : []), [data, adjusted])
+  const prices = useMemo(() => {
+    if (!data) return []
+    if (data.kind === 'ofund') return mode === 'none' ? data.close : data.adjusted
+    if (mode === 'none') return data.close
+    if (mode === 'hfq') return data.adjusted
+    // 前复权 = 后复权 × (最新不复权收盘 ÷ 最新后复权价)：最新一天等于实际价格，历史按除权比例向下调整
+    const n = data.adjusted.length
+    const k = n > 0 && data.adjusted[n - 1] > 0 ? data.close[n - 1] / data.adjusted[n - 1] : 1
+    return data.adjusted.map((x) => x * k)
+  }, [data, mode])
+  const modeText = data?.kind === 'ofund' ? (mode === 'none' ? '单位净值' : '累计净值') : mode === 'qfq' ? '前复权' : mode === 'hfq' ? '后复权' : '不复权'
   const hasK = !!data?.high
 
   const option = useMemo<EChartsOption | null>(() => {
@@ -74,7 +85,7 @@ export default function Quote() {
       const k = data.dates.map((_, i) => {
         const o = data.open![i], h = data.high![i], l = data.low![i]
         if (o === null || h === null || l === null) return ['-', '-', '-', '-']
-        const f = adjusted ? data.adjusted[i] / data.close[i] : 1
+        const f = prices[i] / data.close[i] // 当日复权比例（不复权时为 1）
         return [o * f, prices[i], l * f, h * f]
       })
       const vols = data.dates.map((_, i) => {
@@ -99,7 +110,7 @@ export default function Quote() {
         ],
         dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], ...zoom }, { type: 'slider', xAxisIndex: [0, 1], height: 16, bottom: 8, borderColor: line, textStyle: { color: ink }, ...zoom }],
         series: [
-          { name: adjusted ? '后复权 K 线' : 'K 线', type: 'candlestick', data: k,
+          { name: `K 线（${modeText}）`, type: 'candlestick', data: k,
             itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
           ...mas,
           { name: '成交量（手）', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: vols },
@@ -115,12 +126,12 @@ export default function Quote() {
       yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
       dataZoom: [{ type: 'inside', start: 70 }, { type: 'slider', height: 18, bottom: 8, start: 70, borderColor: line, textStyle: { color: ink } }],
       series: [
-        { name: data.kind === 'ofund' ? (adjusted ? '累计净值' : '单位净值') : adjusted ? '后复权收盘' : '收盘', type: 'line', data: prices, showSymbol: false,
+        { name: data.kind === 'ofund' ? modeText : `收盘（${modeText}）`, type: 'line', data: prices, showSymbol: false,
           lineStyle: { width: 1.6, color: cssVar('--accent') }, itemStyle: { color: cssVar('--accent') } },
         ...mas,
       ],
     }
-  }, [data, prices, adjusted, hasK])
+  }, [data, prices, modeText, hasK])
 
   const valuation = useMemo(() => {
     if (!data?.peTtm || !data.pb) return null
@@ -198,8 +209,18 @@ export default function Quote() {
             )}
             <span style={{ flex: 1 }} />
             <div className="seg">
-              <button className={adjusted ? 'on' : ''} onClick={() => setAdjusted(true)}>{data.kind === 'ofund' ? '累计净值' : '后复权'}</button>
-              <button className={adjusted ? '' : 'on'} onClick={() => setAdjusted(false)}>{data.kind === 'ofund' ? '单位净值' : '不复权'}</button>
+              {data.kind === 'ofund' ? (
+                <>
+                  <button className={mode !== 'none' ? 'on' : ''} onClick={() => setMode('qfq')}>累计净值</button>
+                  <button className={mode === 'none' ? 'on' : ''} onClick={() => setMode('none')}>单位净值</button>
+                </>
+              ) : (
+                <>
+                  <button className={mode === 'qfq' ? 'on' : ''} onClick={() => setMode('qfq')}>前复权</button>
+                  <button className={mode === 'hfq' ? 'on' : ''} onClick={() => setMode('hfq')}>后复权</button>
+                  <button className={mode === 'none' ? 'on' : ''} onClick={() => setMode('none')}>不复权</button>
+                </>
+              )}
             </div>
           </div>
           {option ? <EChart option={option} height={hasK ? 520 : 460} /> : <div className="empty">本地没有这只证券的数据。</div>}
