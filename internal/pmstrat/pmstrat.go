@@ -6,7 +6,9 @@
 //   - 对数价格按布朗运动（无漂移），波动率 σ 由近期现价估计；
 //   - 结束时的 60 秒 TWAP：剩余时间 τ ≥ 60 秒时均值为当前价、方差 σ²(τ − 40)；τ < 60 秒时窗口中已过去的部分已知，
 //     均值为已知部分均值与当前价按时长加权，方差 (τ/60)² σ² τ / 3；
-//   - K 若是估计值，再加上它的误差方差；P(Up) = Φ((均值 − ln K) / 标准差)。
+//   - 再加上两项换算误差：结束端“币安换算成 Chainlink”的误差 EndErrBp（总是存在），K 若是估计值再加它的误差 KErrBp；
+//     没有这一项时，临近结束且起始价精确的情况下标准差趋近 0，概率会被高估到接近 0 / 1；
+//   - P(Up) = Φ((均值 − ln K) / 标准差)。
 package pmstrat
 
 import (
@@ -25,6 +27,7 @@ type Inputs struct {
 	Now, Start, End int64
 	K               float64 // 起始价（Chainlink 口径）
 	KErrBp          float64 // K 的误差（bp，1 个标准差）；精确值时为 0
+	EndErrBp        float64 // 结束端币安换算成 Chainlink 的误差（bp，1 个标准差）
 	Basis           float64 // 币安相对 Chainlink 的溢价，如 0.0013
 	Sigma           float64 // 对数价格波动率，每 √秒
 	Window          int64   // TWAP 窗口（秒），默认 60
@@ -78,8 +81,8 @@ func ProbUp(in Inputs) (Result, bool) {
 		mean = (1-ft)*known + ft*s
 		variance = ft * ft * in.Sigma * in.Sigma * float64(tau) / 3
 	}
-	kerr := in.KErrBp / 1e4
-	sd := math.Sqrt(variance + kerr*kerr)
+	kerr, eerr := in.KErrBp/1e4, in.EndErrBp/1e4
+	sd := math.Sqrt(variance + kerr*kerr + eerr*eerr)
 	if sd <= 0 {
 		return Result{}, false
 	}
@@ -134,6 +137,19 @@ func Median(xs []float64) float64 {
 		return xs[n/2]
 	}
 	return (xs[n/2-1] + xs[n/2]) / 2
+}
+
+// MADSigma 用中位数绝对偏差估计标准差（1.4826 × MAD），对离群点稳健；xs 不会被修改。
+func MADSigma(xs []float64) float64 {
+	if len(xs) < 2 {
+		return 0
+	}
+	m := Median(append([]float64(nil), xs...))
+	dev := make([]float64, len(xs))
+	for i, x := range xs {
+		dev[i] = math.Abs(x - m)
+	}
+	return 1.4826 * Median(dev)
 }
 
 // Edge 是按卖一吃 1 股的预期收益（扣手续费）：p − ask − fee。fee 为每股手续费（rate × ask × (1 − ask)）。

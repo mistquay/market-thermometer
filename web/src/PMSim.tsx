@@ -264,7 +264,8 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
         <strong>策略 · 影子模式</strong>
         <span className="muted small">
           {s.strategy}：按币安现价（换算成 Chainlink 口径）估计 P(Up)，与盘口卖一 + 手续费比较，预期收益 ≥ {(s.minEdge * 100).toFixed(0)}¢ / 股时记录信号，不下单
-          · 基差 {Object.entries(s.basis).map(([a, b]) => `${a} ${(b * 1e4).toFixed(1)}bp（${s.basisN[a]} 个点）`).join('、') || '未校准'}
+          · 基差 {Object.entries(s.basis).map(([a, b]) => `${a} ${(b * 1e4).toFixed(1)}±${(s.basisErr[a] ?? 0).toFixed(1)}bp（${s.basisN[a]} 个点）`).join('、') || '未校准'}
+          {s.ptbLag > 0 && <> · 起始价公布延迟中位 {s.ptbLag.toFixed(0)} 秒</>}
           · 本次启动记录 {s.signals} 条
           {s.lastErr && <> · <span className="bad-text">{s.lastErr}</span></>}
         </span>

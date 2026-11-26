@@ -297,7 +297,7 @@ export type PMEval = {
 }
 export type PMShadowStatus = {
   strategy: string; minEdge: number; evals: PMEval[] | null; signals: number; basis: Record<string, number>; basisN: Record<string, number>
-  sigma: Record<string, number>; lastTick?: string; lastErr?: string; errAt?: string
+  sigma: Record<string, number>; basisErr: Record<string, number>; ptbLag: number; lastTick?: string; lastErr?: string; errAt?: string
 }
 export type PMSignal = {
   id: number; t: number; strategy: string; slug: string; conditionId: string; outcome: number; p: number; ask: number; askSize: number

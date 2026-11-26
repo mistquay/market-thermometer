@@ -30,6 +30,10 @@ type PMShadow struct {
 	loaded   map[string]bool
 	basis    map[string]float64 // 资产 → 币安相对 Chainlink 的溢价
 	basisN   map[string]int
+	basisErr map[string]float64 // 资产 → 基差残差的稳健标准差（bp），用作起始价估计误差与结束端换算误差
+	src      ds.PredictionSource
+	fetching map[string]bool // 正在补拉起始价的 5m 事件
+	ptbLag   []float64       // 起始价公布延迟（秒，5m 事件结束后多久能取到）
 	basisAt  time.Time
 	kCache   map[string]kInfo // 资产/开始时间 → 起始价
 	lastSig  map[string]time.Time
@@ -67,13 +71,19 @@ type PMEval struct {
 	At     time.Time    `json:"at"`
 }
 
+// WithSource 设置数据源：用于在 15m / 1h 盘开始 5 分钟后尽快补拉同一时刻开始的 5m 事件，拿到精确起始价。
+func (p *PMShadow) WithSource(src ds.PredictionSource) *PMShadow {
+	p.src = src
+	return p
+}
+
 func NewPMShadow(st *store.Store, minEdge float64) *PMShadow {
 	if minEdge <= 0 {
 		minEdge = 0.03
 	}
 	return &PMShadow{store: st, now: time.Now, logf: log.Printf, name: "updown-fair", minEdge: minEdge, cooldown: 30 * time.Second,
 		keep: 70 * time.Minute, spot: map[string][]pmstrat.Point{}, loaded: map[string]bool{}, basis: map[string]float64{},
-		basisN: map[string]int{}, kCache: map[string]kInfo{}, lastSig: map[string]time.Time{}, sigmaOf: map[string]float64{}}
+		basisN: map[string]int{}, basisErr: map[string]float64{}, fetching: map[string]bool{}, kCache: map[string]kInfo{}, lastSig: map[string]time.Time{}, sigmaOf: map[string]float64{}}
 }
 
 func assetOf(series string) string { a, _, _ := strings.Cut(series, "-"); return a }
@@ -128,6 +138,11 @@ func (p *PMShadow) tick(ctx context.Context, now time.Time, targets []PMBookTarg
 			return err
 		}
 		p.basisAt = now
+		for k := range p.fetching { // 节流键（slug@时刻）用过即可丢；进行中的请求键（不含 @）保留
+			if strings.Contains(k, "@") {
+				delete(p.fetching, k)
+			}
+		}
 	}
 	bookOf := map[string]ds.Book{}
 	for _, b := range books {
@@ -203,7 +218,8 @@ func (p *PMShadow) refreshBasis(ctx context.Context, targets []PMBookTarget, now
 			}
 		}
 		if len(rel) > 0 {
-			p.basis[a], p.basisN[a] = pmstrat.Median(rel), len(rel)
+			p.basis[a], p.basisN[a] = pmstrat.Median(append([]float64(nil), rel...)), len(rel)
+			p.basisErr[a] = max(pmstrat.MADSigma(rel)*1e4, 0.5) // 下限 0.5bp
 		}
 	}
 	return nil
@@ -249,10 +265,10 @@ func (p *PMShadow) startPrice(ctx context.Context, asset, sym string, start int6
 	} else if m, src, err := p.binanceTwap(ctx, sym, start); err != nil {
 		return kInfo{}, err
 	} else if src != "" && p.basisN[asset] > 0 {
-		// 误差：2.5 秒现价的 60 秒均值约 0.5bp，1 分钟 K 线约 2bp（docs/polymarket.md §8）
-		e := 0.5
+		// 误差取基差残差的稳健标准差；用 1 分钟 K 线估计时再放大（OHLC 均值只是 60 秒均价的近似）
+		e := p.basisErr[asset]
 		if src == "bar" {
-			e = 2
+			e = max(e, 2)
 		}
 		k = kInfo{k: m / (1 + p.basis[asset]), src: src, errBp: e, at: now}
 	}
@@ -302,8 +318,11 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 		return e
 	}
 	p.sigmaOf[t.Symbol] = sigma
+	if k.src != "exact" && now.Sub(t.Start) >= 5*time.Minute {
+		p.fetchStartPrice(a, t.Start.Unix(), now)
+	}
 	r, ok := pmstrat.ProbUp(pmstrat.Inputs{Now: now.Unix(), Start: t.Start.Unix(), End: t.End.Unix(), K: k.k, KErrBp: k.errBp,
-		Basis: p.basis[a], Sigma: sigma, Spot: recent})
+		EndErrBp: p.basisErr[a], Basis: p.basis[a], Sigma: sigma, Spot: recent})
 	if !ok {
 		e.Reason = "现价中断"
 		return e
@@ -325,6 +344,41 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 	return e
 }
 
+// fetchStartPrice 在后台按 slug 补拉同一时刻开始的 5m 事件（结束后才公布起始价），拿到后存入本地，下一轮即用精确值。
+// 同一事件同时只有一个请求；调用方持有 p.mu。
+func (p *PMShadow) fetchStartPrice(asset string, start int64, now time.Time) {
+	slug := fmt.Sprintf("%s-updown-5m-%d", asset, start)
+	key := slug + "@" + now.Truncate(10*time.Second).String() // 每个事件每 10 秒最多一次
+	if p.src == nil || p.fetching[slug] || p.fetching[key] {
+		return
+	}
+	p.fetching[slug], p.fetching[key] = true, true
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		evs, err := p.src.Events(ctx, ds.PMEventQuery{Slug: slug, Limit: 1})
+		found := err == nil && len(evs) == 1 && evs[0].PriceToBeat > 0
+		if found {
+			err = p.store.SavePMEvents(ctx, evs, p.now())
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		delete(p.fetching, slug)
+		for k := range p.fetching { // 清理过期的节流键
+			if strings.HasPrefix(k, slug+"@") && k != key {
+				delete(p.fetching, k)
+			}
+		}
+		if found && err == nil {
+			delete(p.kCache, fmt.Sprintf("%s/%d", asset, start))
+			p.ptbLag = append(p.ptbLag, p.now().Sub(time.Unix(start+300, 0)).Seconds())
+			if len(p.ptbLag) > 50 {
+				p.ptbLag = p.ptbLag[len(p.ptbLag)-50:]
+			}
+		}
+	}()
+}
+
 // PMShadowStatus 是影子模式状态。
 type PMShadowStatus struct {
 	Strategy string             `json:"strategy"`
@@ -334,6 +388,8 @@ type PMShadowStatus struct {
 	Basis    map[string]float64 `json:"basis"`
 	BasisN   map[string]int     `json:"basisN"`
 	Sigma    map[string]float64 `json:"sigma"` // 每 √秒
+	BasisErr map[string]float64 `json:"basisErr"`
+	PTBLag   float64            `json:"ptbLag"` // 起始价公布延迟的中位数（秒），0 为还没有样本
 	LastTick time.Time          `json:"lastTick,omitzero"`
 	LastErr  string             `json:"lastErr,omitempty"`
 	ErrAt    time.Time          `json:"errAt,omitzero"`
@@ -363,5 +419,6 @@ func (p *PMShadow) Status() PMShadowStatus {
 		}
 	}
 	return PMShadowStatus{Strategy: p.name, MinEdge: p.minEdge, Evals: evals, Signals: p.signals, Basis: cp(p.basis), BasisN: n,
-		Sigma: cp(p.sigmaOf), LastTick: p.lastTick, LastErr: p.lastErr, ErrAt: p.errAt}
+		Sigma: cp(p.sigmaOf), BasisErr: cp(p.basisErr), PTBLag: pmstrat.Median(append([]float64(nil), p.ptbLag...)),
+		LastTick: p.lastTick, LastErr: p.lastErr, ErrAt: p.errAt}
 }

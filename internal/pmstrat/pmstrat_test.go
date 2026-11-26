@@ -46,6 +46,14 @@ func TestProbUpBasic(t *testing.T) {
 	if _, ok := ProbUp(in); ok {
 		t.Fatal("not started")
 	}
+	// 起始价精确、只剩 10 秒、现价只高 0.5bp：有结束端换算误差（1bp）时概率不应接近 1
+	in = Inputs{Now: 1190, Start: 900, End: 1200, K: 100, Sigma: sigma, EndErrBp: 1, Spot: flat(1100, 1190, 100*1.00005)}
+	if r, _ := ProbUp(in); r.P > 0.8 || r.P < 0.55 {
+		t.Fatalf("end noise: %+v", r)
+	}
+	if m := MADSigma([]float64{1, 2, 3, 4, 100}); math.Abs(m-1.4826) > 1e-9 {
+		t.Fatalf("mad %v", m)
+	}
 	// K 的误差加大方差：概率向 0.5 收缩
 	in = Inputs{Now: 1000, Start: 900, End: 1200, K: 100, Sigma: sigma, Spot: flat(800, 1000, 100*math.Exp(sd))}
 	a, _ := ProbUp(in)

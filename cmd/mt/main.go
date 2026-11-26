@@ -217,7 +217,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	}
 	var shadow *job.PMShadow
 	if pmBook != nil && cfg.Polymarket.Strategy.Shadow {
-		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge)
+		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge).WithSource(pm.Source())
 		pmBook.OnTick(shadow.Tick)
 	}
 	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook, shadow: shadow}, nil
