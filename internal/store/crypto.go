@@ -69,6 +69,31 @@ func (s *Store) Klines(ctx context.Context, symbol, interval string, from, to in
 	return out, rows.Err()
 }
 
+// KlinesBefore 读取开盘时间 < to（0 为不限）的最后 limit 根 K 线，按时间升序；供页面向前翻页。
+func (s *Store) KlinesBefore(ctx context.Context, symbol, interval string, to int64, limit int) ([]ds.Kline, error) {
+	if to == 0 {
+		to = 1 << 62
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT t, open, high, low, close, volume, quote FROM crypto_bar
+		WHERE symbol=? AND interval=? AND t<? ORDER BY t DESC LIMIT ?`, symbol, interval, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ds.Kline{}
+	for rows.Next() {
+		var k ds.Kline
+		if err := rows.Scan(&k.T, &k.Open, &k.High, &k.Low, &k.Close, &k.Volume, &k.Quote); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, rows.Err()
+}
+
 // KlineLast 返回某周期最后一根 K 线的开盘时间；没有时返回 0。
 func (s *Store) KlineLast(ctx context.Context, symbol, interval string) (int64, error) {
 	var t sql.NullInt64

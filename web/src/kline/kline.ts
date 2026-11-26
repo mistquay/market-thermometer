@@ -14,6 +14,10 @@ export type KlineData = {
   volume: Num[] | null // 股
   lines: { name: string; color: string; data: Num[] }[] // 均线等叠加线
   title: string // 主序列名，如 “K 线（前复权）”
+  /** 日内 K 线：与 dates 一一对应的 Unix 秒（UTC）；有它时按时间轴画（显示本地时间），dates 只用作图例文字。 */
+  times?: number[]
+  digits?: number // 价格小数位，默认 3
+  volUnit?: string // 成交量单位，默认 “股”（按万 / 亿股显示）；给出时按原值加单位显示
 }
 
 export type KlineProps = { data: KlineData; height: number }

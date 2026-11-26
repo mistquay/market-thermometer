@@ -258,6 +258,34 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T
 }
 
+// ---- 加密货币与预测市场 ----
+
+export type Kline = { t: number; o: number; h: number; l: number; c: number; v: number; q: number } // t 为 UTC 毫秒
+export type SyncStatus = { running: boolean; lastRun?: string; errors: number; log: string[]; every: string }
+export type KlineCoverage = { symbol: string; interval: string; first: number; last: number; count: number; source: string }
+export type CryptoState =
+  | { configured: false }
+  | { configured: true; symbols: string[]; intervals: string[]; status: SyncStatus; coverage: KlineCoverage[] }
+
+export type PMMarket = {
+  conditionId: string; slug: string; question: string; groupTitle?: string
+  outcomes: string[]; tokens: string[]; prices: number[]
+  bestBid: number; bestAsk: number; lastPrice: number; volume: number; volume24h: number; liquidity: number
+  start: string; end: string; closed: boolean; accepting: boolean; tickSize: number; minSize: number
+  feeType?: string; winner: number; resolution?: string
+}
+export type PMEvent = {
+  id: string; slug: string; title: string; series?: string; tags: string[]; start: string; end: string
+  closed: boolean; negRisk: boolean; volume: number; volume24h: number; liquidity: number; markets: PMMarket[]
+}
+export type PMSeriesStats = { series: string; events: number; closed: number; first: number; last: number; withHistory: number; resolved: number; firstWins: number }
+export type PMState =
+  | { configured: false }
+  | { configured: true; source: string; series: string[]; status: SyncStatus; stats: PMSeriesStats[]; watched: PMEvent[] }
+export type PricePoint = { t: number; p: number }
+export type BookLevel = { price: number; size: number }
+export type Book = { token: string; time: string; bids: BookLevel[]; asks: BookLevel[] }
+
 export const api = {
   me: () => request<{ ok: boolean }>('GET', '/api/auth/me'),
   login: (password: string) => request<{ ok: boolean }>('POST', '/api/auth/login', { password }),
@@ -317,4 +345,20 @@ export const api = {
     id ? request<NotifyChannel>('PUT', `/api/notify/channels/${id}`, c) : request<NotifyChannel>('POST', '/api/notify/channels', c),
   deleteChannel: (id: number) => request<{ ok: boolean }>('DELETE', `/api/notify/channels/${id}`),
   testChannel: (id: number) => request<{ id: number; name: string; error?: string }>('POST', `/api/notify/channels/${id}/test`),
+  crypto: () => request<CryptoState>('GET', '/api/crypto'),
+  cryptoKlines: (symbol: string, interval: string, to = 0, limit = 1500) =>
+    request<{ klines: Kline[]; more: boolean }>('GET', `/api/crypto/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&to=${to}&limit=${limit}`),
+  cryptoPrice: (symbol: string) => request<{ symbol: string; price: number; source: string; time: string }>('GET', `/api/crypto/price?symbol=${encodeURIComponent(symbol)}`),
+  syncCrypto: () => request<{ ok: boolean }>('POST', '/api/crypto/sync'),
+  pm: () => request<PMState>('GET', '/api/pm'),
+  pmEvents: (series: string, state: 'upcoming' | 'closed', limit = 50, before = 0) =>
+    request<PMEvent[]>('GET', `/api/pm/events?series=${encodeURIComponent(series)}&state=${state}&limit=${limit}&before=${before}`),
+  pmEvent: (slug: string) => request<{ event: PMEvent; watched: boolean }>('GET', `/api/pm/events/${encodeURIComponent(slug)}`),
+  pmSearch: (q: string) => request<PMEvent[]>('GET', `/api/pm/search?q=${encodeURIComponent(q)}`),
+  pmPrices: (token: string, from = 0, to = 0, fidelity = 0) =>
+    request<{ points: PricePoint[]; source: string }>('GET', `/api/pm/prices?token=${encodeURIComponent(token)}&from=${from}&to=${to}&fidelity=${fidelity}`),
+  pmBook: (token: string) => request<Book>('GET', `/api/pm/book?token=${encodeURIComponent(token)}`),
+  pmWatch: (slug: string) => request<{ ok: boolean }>('POST', '/api/pm/watch', { slug }),
+  pmUnwatch: (slug: string) => request<{ ok: boolean }>('DELETE', `/api/pm/watch/${encodeURIComponent(slug)}`),
+  syncPM: () => request<{ ok: boolean }>('POST', '/api/pm/sync'),
 }

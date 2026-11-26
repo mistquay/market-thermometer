@@ -13,6 +13,8 @@ import Plugins from './Plugins'
 import Portfolio from './Portfolio'
 import Quote from './Quote'
 import Sim from './Sim'
+import Crypto from './Crypto'
+import Predict from './Predict'
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -24,6 +26,8 @@ const PAGES = [
   { path: 'portfolio', label: '组合', el: () => <Portfolio /> },
   { path: 'quote', label: '行情', el: () => <Quote /> },
   { path: 'sim', label: '模拟', el: () => <Sim /> },
+  { path: 'crypto', label: '加密', el: () => <Crypto /> },
+  { path: 'predict', label: '预测', el: () => <Predict /> },
   { path: 'funds', label: '基金', el: () => <Funds /> },
   { path: 'data', label: '数据', el: () => <DataPage /> },
   { path: 'quality', label: '质量', el: () => <Quality /> },

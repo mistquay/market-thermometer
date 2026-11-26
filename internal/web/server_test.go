@@ -192,3 +192,30 @@ func TestFundsAPI(t *testing.T) {
 		t.Fatalf("funds job without source: %d %s", w.Code, w.Body)
 	}
 }
+
+// 未配置加密行情 / 预测市场时（同步器为 nil）各接口不能崩溃。
+func TestCryptoPMUnconfigured(t *testing.T) {
+	h := newTestServer(t)
+	ck := do(h, "POST", "/api/auth/login", `{"password":"correct-horse"}`, nil, "").Result().Cookies()
+	for _, c := range []struct {
+		method, path, body string
+		code               int
+	}{
+		{"GET", "/api/crypto", "", 200},
+		{"GET", "/api/crypto/klines?symbol=BTCUSDT&interval=1h", "", 400},
+		{"GET", "/api/crypto/price?symbol=BTCUSDT", "", 400},
+		{"POST", "/api/crypto/sync", "", 400},
+		{"GET", "/api/pm", "", 200},
+		{"GET", "/api/pm/events?series=btc-up-or-down-15m", "", 200},
+		{"GET", "/api/pm/events/btc-updown-15m-1", "", 400},
+		{"GET", "/api/pm/search?q=btc", "", 400},
+		{"GET", "/api/pm/book?token=1", "", 400},
+		{"POST", "/api/pm/watch", `{"slug":"x"}`, 400},
+		{"POST", "/api/pm/sync", "", 400},
+	} {
+		w := do(h, c.method, c.path, c.body, ck, "")
+		if w.Code != c.code || (c.code == 200 && strings.Contains(w.Body.String(), `"configured":true`)) {
+			t.Errorf("%s %s: %d %s", c.method, c.path, w.Code, w.Body)
+		}
+	}
+}

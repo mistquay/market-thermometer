@@ -20,7 +20,9 @@ function legendAt(d: KlineData, i: number): Legend {
 }
 
 const fmt = (x: number | undefined | null, digits = 3) => (x === undefined || x === null ? '—' : x.toFixed(digits))
-const fmtVol = (x: number | undefined) => (x === undefined ? '—' : x >= 1e8 ? `${(x / 1e8).toFixed(2)} 亿股` : `${(x / 1e4).toFixed(0)} 万股`)
+const fmtVol = (x: number | undefined, unit?: string) => (x === undefined ? '—'
+  : unit ? `${x >= 1e4 ? x.toFixed(0) : x.toPrecision(4)} ${unit}`
+  : x >= 1e8 ? `${(x / 1e8).toFixed(2)} 亿股` : `${(x / 1e4).toFixed(0)} 万股`)
 
 export default function LwcKline({ data, height }: KlineProps) {
   const box = useRef<HTMLDivElement>(null)
@@ -40,20 +42,26 @@ export default function LwcKline({ data, height }: KlineProps) {
       timeScale: { borderColor: line, rightOffset: 4 },
       localization: { locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' },
     })
-    const t = (i: number) => data.dates[i] as Time
+    // 库按 UTC 显示时间戳：日内数据加上本地时区偏移，让坐标轴显示本地时间
+    const tz = -new Date().getTimezoneOffset() * 60
+    const { times } = data
+    if (times) chart.applyOptions({ timeScale: { timeVisible: true, secondsVisible: false } })
+    const t = (i: number) => (times ? times[i] + tz : data.dates[i]) as Time
+    const digits = data.digits ?? 3
+    const priceFormat = { type: 'price' as const, precision: digits, minMove: 10 ** -digits }
     const { open, high, low, volume } = data
     const candle = !!(open && high && low)
     if (candle) {
       const s = chart.addSeries(CandlestickSeries, {
         upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN, wickUpColor: UP, wickDownColor: DOWN,
-        priceLineVisible: false,
+        priceLineVisible: false, priceFormat,
       }, 0)
       s.setData(data.dates.map((_, i) => {
         const o = open[i], h = high[i], l = low[i]
         return o === null || h === null || l === null ? { time: t(i) } : { time: t(i), open: o, high: h, low: l, close: data.close[i] }
       }))
     } else {
-      const s = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 2, priceLineVisible: false }, 0)
+      const s = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 2, priceLineVisible: false, priceFormat }, 0)
       s.setData(data.dates.map((_, i) => ({ time: t(i), value: data.close[i] })))
     }
     for (const l of data.lines) {
@@ -69,7 +77,7 @@ export default function LwcKline({ data, height }: KlineProps) {
     const n = data.dates.length
     chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 250), to: n + 4 }) // 默认最近约一年
     setLegend(legendAt(data, n - 1))
-    const index = new Map(data.dates.map((d, i) => [d, i]))
+    const index = new Map(data.dates.map((_, i) => [String(t(i)), i]))
     const onMove = (p: MouseEventParams) => {
       const i = p.time === undefined ? n - 1 : index.get(String(p.time))
       if (i !== undefined) setLegend(legendAt(data, i))
@@ -88,10 +96,10 @@ export default function LwcKline({ data, height }: KlineProps) {
         <div className="lwc-legend mono">
           <span>{legend.date}</span>
           <span className="muted">{data.title}</span>
-          {legend.o !== undefined && <span>开 {fmt(legend.o)} 高 {fmt(legend.h)} 低 {fmt(legend.l)}</span>}
-          <span>收 {fmt(legend.c)}</span>
-          {legend.lines.map((x) => <span key={x.name} style={{ color: x.color }}>{x.name} {fmt(x.v)}</span>)}
-          {legend.v !== undefined && <span className="muted">量 {fmtVol(legend.v)}</span>}
+          {legend.o !== undefined && <span>开 {fmt(legend.o, data.digits)} 高 {fmt(legend.h, data.digits)} 低 {fmt(legend.l, data.digits)}</span>}
+          <span>收 {fmt(legend.c, data.digits)}</span>
+          {legend.lines.map((x) => <span key={x.name} style={{ color: x.color }}>{x.name} {fmt(x.v, data.digits)}</span>)}
+          {legend.v !== undefined && <span className="muted">量 {fmtVol(legend.v, data.volUnit)}</span>}
         </div>
       )}
     </div>
