@@ -247,7 +247,7 @@ func (r *Runner) syncStocks(ctx context.Context) error {
 			}
 		}
 		batch, pending = map[string]map[string][]ds.StockBar{}, 0
-		return nil
+		return r.collectExt(context.WithoutCancel(ctx)) // 同一次请求顺带取到的 OHLC、估值等
 	}
 	var failed []string
 	failedStocks, stockTasks := 0, 0

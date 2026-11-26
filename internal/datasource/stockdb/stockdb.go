@@ -49,6 +49,16 @@ type Source struct {
 
 	mu    sync.Mutex
 	names map[string]string // 拉取日线时顺带记下的最新证券名称（日 K 每行带 name）
+	ext   map[string][]ds.StockExt
+}
+
+// TakeExt 返回并清空自上次调用以来拉取日线时记下的扩展字段（实现 ds.ExtCollector）。
+func (s *Source) TakeExt() map[string][]ds.StockExt {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.ext
+	s.ext = nil
+	return out
 }
 
 // TakeNames 返回并清空自上次调用以来拉取日线时记下的证券名称（实现 ds.NameCollector）。
@@ -144,14 +154,22 @@ func (s *Source) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar
 	if err != nil {
 		return nil, fmt.Errorf("stockdb %s: %w", code, err)
 	}
-	if name := latestName(rows); name != "" {
-		s.mu.Lock()
+	ext := clipExt(parseExt(rows), s.now())
+	name := latestName(rows)
+	s.mu.Lock()
+	if name != "" {
 		if s.names == nil {
 			s.names = map[string]string{}
 		}
 		s.names[code] = name
-		s.mu.Unlock()
 	}
+	if len(ext) > 0 {
+		if s.ext == nil {
+			s.ext = map[string][]ds.StockExt{}
+		}
+		s.ext[code] = ext
+	}
+	s.mu.Unlock()
 	return clipFinal(bars, s.now()), nil
 }
 
@@ -199,6 +217,48 @@ func parseBars(rows []json.RawMessage, adj [][2]json.RawMessage) ([]ds.StockBar,
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
 	return out, nil
+}
+
+// parseExt 取日 K 的扩展字段（与 parseBars 一样跳过停牌、无效行）。PE、PB、市值为 0 或缺失时记为 nil。
+// 注意：stockdb 的 pe_ttm / pb 口径未核实（2026-11-25 600000 的 PE：stockdb 6.89，腾讯 6.86）。
+func parseExt(rows []json.RawMessage) []ds.StockExt {
+	out := make([]ds.StockExt, 0, len(rows))
+	for _, raw := range rows {
+		var r struct {
+			Date                   json.Number `json:"date"`
+			Open, High, Low, Close float64
+			Volume, Amount         float64
+			PETTM                  *float64 `json:"pe_ttm"`
+			PB                     *float64 `json:"pb"`
+			TotalMV                *float64 `json:"total_mv"`
+			FloatMV                *float64 `json:"float_mv"`
+		}
+		if string(raw) == "null" || json.Unmarshal(raw, &r) != nil || r.Close <= 0 || r.Volume <= 0 {
+			continue
+		}
+		d, ok := fmtDate(r.Date.String())
+		if !ok {
+			continue
+		}
+		nz := func(p *float64) *float64 {
+			if p == nil || *p == 0 {
+				return nil
+			}
+			return p
+		}
+		out = append(out, ds.StockExt{Date: d, Open: r.Open, High: r.High, Low: r.Low, Volume: r.Volume, Amount: r.Amount,
+			PETTM: nz(r.PETTM), PB: nz(r.PB), TotalMV: nz(r.TotalMV), FloatMV: nz(r.FloatMV)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+	return out
+}
+
+func clipExt(ext []ds.StockExt, now time.Time) []ds.StockExt {
+	last := ds.LatestFinalDate(now)
+	for len(ext) > 0 && ext[len(ext)-1].Date > last {
+		ext = ext[:len(ext)-1]
+	}
+	return ext
 }
 
 // latestName 返回日 K 中日期最新一行的证券名称。

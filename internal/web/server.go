@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/quality", s.auth(s.quality))
 	api.HandleFunc("POST /api/jobs/crosscheck", s.auth(s.startCrossCheck))
 	api.HandleFunc("POST /api/jobs/gapfill", s.auth(s.startGapFill))
+	api.HandleFunc("POST /api/jobs/ext-backfill", s.auth(s.startExtBackfill))
 	api.HandleFunc("GET /api/securities/search", s.auth(s.searchSecurities))
 	api.HandleFunc("GET /api/securities/{kind}/{code}/series", s.auth(s.securitySeries))
 	api.HandleFunc("POST /api/jobs/names", s.auth(s.startNames))

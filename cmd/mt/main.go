@@ -5,6 +5,7 @@
 //	mt breadth [-c config.yaml] [-full]  计算市场广度（-full 清空后从头回填）
 //	mt score  [-c config.yaml]           按生效参数重算全部得分
 //	mt import-bars [-c config.yaml] [-source 名称] 文件.csv  导入日线（code,date,close[,mult]），同日覆盖
+//	mt ext-backfill [-c config.yaml] [-from 2015-01-01]  从 stockdb 回填 A 股 OHLC、成交、估值（可中断续跑）
 //	mt gapfill [-c config.yaml] -source tencent 代码…  用数据源补齐个股日线缺口（不覆盖已有数据）
 //	mt hashpw                            从标准输入读口令，输出 bcrypt 哈希，填入 config.yaml
 package main
@@ -65,6 +66,8 @@ func main() {
 		err = cmdBreadth(os.Args[2:])
 	case "import-bars":
 		err = cmdImportBars(os.Args[2:])
+	case "ext-backfill":
+		err = cmdExtBackfill(os.Args[2:])
 	case "gapfill":
 		err = cmdGapFill(os.Args[2:])
 	case "score":
@@ -80,7 +83,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|import-bars|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
 	os.Exit(2)
 }
 
@@ -359,6 +362,51 @@ func cmdImportBars(args []string) error {
 	}
 	fmt.Println(fmt.Sprintf("已导入 %d 只证券、%d 根日线（来源 %s）。", res.Codes, res.Rows, *source),
 		"含股票时运行 mt breadth -local 重算市场广度。")
+	return nil
+}
+
+func cmdExtBackfill(args []string) error {
+	fs := flag.NewFlagSet("ext-backfill", flag.ExitOnError)
+	from := fs.String("from", job.ExtBackfillFrom, "回填起点")
+	a, err := setup(fs, args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	if _, err := time.Parse("2006-01-02", *from); err != nil {
+		return fmt.Errorf("-from 格式应为 YYYY-MM-DD")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	done := make(chan struct{})
+	go func() {
+		printed := 0
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if st := a.runner.Current(); st != nil {
+					for ; printed < len(st.Log); printed++ {
+						fmt.Println(st.Log[printed])
+					}
+				}
+			}
+		}
+	}()
+	st, err := a.runner.RunExtBackfill(ctx, *from)
+	close(done)
+	if err != nil {
+		return err
+	}
+	for _, line := range st.Log[max(0, len(st.Log)-2):] {
+		fmt.Println(line)
+	}
+	if st.State != "done" {
+		return fmt.Errorf("结束状态：%s", st.State)
+	}
 	return nil
 }
 

@@ -92,6 +92,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate portfolio: %w", err)
 	}
+	if err := st.migrateExt(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate ext: %w", err)
+	}
 	return st, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -236,5 +237,70 @@ func TestSyncSkipsWhenListSourceDown(t *testing.T) {
 	_ = r.syncStocks(ctx) // 大量失败会返回错误，这里只关心回退次数
 	if len(backup.order) != fallbackLimit {
 		t.Fatalf("fallbacks = %d, want %d", len(backup.order), fallbackLimit)
+	}
+}
+
+// extStocks 在 Bars 时记下扩展字段（模拟 stockdb）。
+type extStocks struct {
+	srcStocks
+	mu    sync.Mutex
+	ext   map[string][]ds.StockExt
+	calls []string
+}
+
+func (e *extStocks) Bars(ctx context.Context, code, from, to string) ([]ds.StockBar, error) {
+	bars, err := e.srcStocks.Bars(ctx, code, from, to)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls = append(e.calls, code)
+	if e.ext == nil {
+		e.ext = map[string][]ds.StockExt{}
+	}
+	for _, b := range bars {
+		e.ext[code] = append(e.ext[code], ds.StockExt{Date: b.Date, Open: b.Close, High: b.Close, Low: b.Close, Volume: 1})
+	}
+	return bars, err
+}
+
+func (e *extStocks) TakeExt() map[string][]ds.StockExt {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := e.ext
+	e.ext = nil
+	return out
+}
+
+func TestExtBackfill(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 7, 10, 20, 0, 0, 0, ds.Shanghai)
+	bars := []ds.StockBar{{Date: "2026-01-05", Close: 1, Mult: 1}, {Date: "2026-07-09", Close: 2, Mult: 1}}
+	if err := st.UpsertStockList(ctx, []ds.Stock{{Code: "600000", Kind: ds.KindStock}, {Code: "600001", Kind: ds.KindStock}, {Code: "510300", Kind: ds.KindFund}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveStockBars(ctx, "x", map[string][]ds.StockBar{"600000": bars, "600001": bars, "510300": bars}); err != nil {
+		t.Fatal(err)
+	}
+	src := &extStocks{srcStocks: srcStocks{name: "x", bars: map[string][]ds.StockBar{"600000": bars, "600001": bars, "510300": bars}}}
+	r := NewRunner(st, nil, market.CN, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	r.now = func() time.Time { return now }
+	r.SetStocks([]ds.StockSource{src}, 2)
+	if _, err := r.RunExtBackfill(ctx, "2026-01-01"); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := st.StockExt(ctx, "600000"); len(e) != 2 || e[1].High != 2 {
+		t.Fatalf("ext: %+v", e)
+	}
+	if e, _ := st.StockExt(ctx, "510300"); len(e) != 0 { // 只回填股票
+		t.Fatalf("fund ext: %+v", e)
+	}
+	// 续跑：已覆盖的跳过
+	src.calls = nil
+	if _, err := r.RunExtBackfill(ctx, "2026-01-01"); err != nil || len(src.calls) != 0 {
+		t.Fatalf("rerun calls: %v %v", src.calls, err)
 	}
 }

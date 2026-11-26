@@ -64,3 +64,19 @@ func TestLatestName(t *testing.T) {
 		t.Fatalf("latestName = %q", got)
 	}
 }
+
+func TestParseExt(t *testing.T) {
+	rows := []json.RawMessage{
+		json.RawMessage(`{"date":20261124,"open":10.62,"high":10.75,"low":10.45,"close":10.71,"volume":70310900,"amount":748880000,"pe_ttm":6.89,"pb":0.47,"total_mv":356706000000,"float_mv":356706000000}`),
+		json.RawMessage(`{"date":20261123,"open":10.8,"high":10.86,"low":10.64,"close":10.68,"volume":75802700,"amount":814040000,"pe_ttm":null,"pb":0}`),
+		json.RawMessage(`{"date":20261122,"close":10.6,"volume":0}`), // 停牌：跳过
+		json.RawMessage(`null`),
+	}
+	ext := parseExt(rows)
+	if len(ext) != 2 || ext[0].Date != "2026-11-23" || ext[1].High != 10.75 || ext[1].PETTM == nil || *ext[1].PETTM != 6.89 {
+		t.Fatalf("ext: %+v", ext)
+	}
+	if ext[0].PETTM != nil || ext[0].PB != nil || ext[0].TotalMV != nil {
+		t.Fatalf("missing fields should be nil: %+v", ext[0])
+	}
+}

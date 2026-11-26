@@ -19,6 +19,19 @@ func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rep)
 }
 
+// startExtBackfill 从 stockdb 回填 A 股扩展字段（OHLC、成交、估值），默认 2015 年起。
+func (s *Server) startExtBackfill(w http.ResponseWriter, r *http.Request) {
+	st, err := s.runner.StartExtBackfill(job.ExtBackfillFrom)
+	switch {
+	case errors.Is(err, job.ErrBusy):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		writeJSON(w, http.StatusAccepted, st)
+	}
+}
+
 // startGapFill 用指定数据源补齐这些股票的缺口（通常来自交叉核对中“本地缺、来源有”的差异）。
 func (s *Server) startGapFill(w http.ResponseWriter, r *http.Request) {
 	var req struct {
