@@ -44,6 +44,9 @@
 - 已完成：M5 推送（`internal/notify` 四个渠道 + `job.Pusher` + 设置页）、调度（`job.Scheduler`，`mt serve -schedule=false` 可关）、数据质量页（`internal/quality` + 质量页）、回测稳健性（`backtest.Perturb` / `Years` + 回测页面板）、部署文档 `docs/deploy.md`。
 - 2026-11-26 个股与场内基金改用通达信插件 `tdx`（用户同意）：本地 `sources: [tdx, stockdb, tencent]`、`fund_sources: [tdx]`。腾讯拉的 364 只基金日线已删除，改用 tdx 全量重拉；切换前的备份在 `data/backup/mt-before-tdx-20261126.db`。服务器同样用 tdx（deploy.md §6）。
 - P2 插件化（2026-11-25）、P3 投研（2026-11-26，财务报表除外）、P4 模拟交易（2026-11-26）已完成，见 roadmap §5。P5 实盘按用户决定暂不做，下一步可选 P6 多市场或回到温度计参数校准。
+- 2026-11-26 用户定方向：接入加密货币与 **Polymarket**，自动交易围绕 Polymarket（策略、部署、授权方式见 `docs/polymarket.md`）。
+  - 已完成：币安 / OKX K 线插件与 7×24 同步、Polymarket 只读插件与 7×24 同步（短期涨跌盘系列、关注事件）、Web 加密页与预测页。
+  - 下一步：盘口快照采集 → 二元结果模拟盘 → 策略引擎 → 海外服务器实盘插件（docs/polymarket.md §6）。
 - 用户 2026-11-25 说明：快速开发阶段功能优先，非必要的测试与决策自行处理，只有必须确认的才停下来问。跳过的验证记在下面的清单里，全部开发完后统一验证。
 
 ### 待统一验证清单
@@ -59,6 +62,13 @@
 - 模拟交易：浏览器里只看过下单与调仓预览（委托待成交）；“成交后持仓、净值曲线、撤单”只有单测；没经历过真实的次日撮合。
 - 行情页估值图图例、模拟页三处显示修正后没回看。
 - 扩展字段（stock_daily_ext）有 625 / 1,161 万行的最高 / 最低价与收盘价矛盾（最高价低于收盘价等），来源 stockdb，未排查。
+- 加密 / 预测：
+  - 浏览器里只看过加密页的 BTC 1 小时、预测页首页、一个 5m 事件详情和一个互斥多结果事件详情（订单簿、Yes 合计）。
+  - 日线 / 1 分钟、ECharts 渲染器、“加载更早”、关注 / 取消关注、搜索结果列表没点过。
+  - 1 分钟 K 线（config 加了 `1m: 14`）还没确认同步完成。
+  - Polymarket 价格历史首轮回填未完成（每轮 2,400 个市场，约 1.1 万个）。
+  - 手续费公式未核实。
+  - 已结算事件的成交额是事件刚结束时的快照，之后不再刷新，有的显示 $0。
 - K 线 TradingView 渲染器只看过 600519 日线；场内基金 / 场外基金（折线模式）、暗色主题没看过。
 
 - 下面是原始任务清单，保留作参考。
@@ -98,5 +108,9 @@ P1 做完后汇报，再进入 **P2 插件化重构**：
   - 用 Bash 内嵌 Python 改文件时，长脚本容易被 shell 引号打断，优先写成独立脚本文件再执行；脚本里先校验所有替换都能匹配，再写盘。
   - LSP 诊断经常是旧缓存，以 `go build` / `go vet` 的结果为准。
   - 用 `go build -o mt.exe` 替换正在运行的程序会留下 `mt.exe~`（已在 .gitignore 中）。
-- **登录口令**：本地 `config.yaml` 里是一个临时口令的哈希，开发用的明文口令在已失效会话的 scratchpad 里，可能已经没有了。需要登录时请用户运行 `mt.exe hashpw` 生成新口令，或者你重新生成一个临时口令并告诉用户。
+- **登录口令**：本地 `config.yaml` 里是用户口令的哈希，不要改。浏览器自测时：
+  - 用 `echo <临时口令> | mt.exe hashpw` 生成哈希；
+  - 把 config.yaml 复制到 `data/scratch/config.yaml`（已在 gitignore 中），替换 `admin_password_hash`，`listen` 改成 8091；
+  - 运行 `mt.exe serve -c data/scratch/config.yaml`。
+  - 注意：它与正式配置共用数据库，并且会启动定时同步。
 - 后台运行的 `mt.exe serve` 会随上一个会话结束，需要时重新启动：`cd D:\project\go_project\market-thermometer && ./mt.exe serve`，地址 http://127.0.0.1:8080 。
