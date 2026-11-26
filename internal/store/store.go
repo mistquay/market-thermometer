@@ -96,6 +96,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate ext: %w", err)
 	}
+	if err := st.migrateSim(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate sim: %w", err)
+	}
 	return st, nil
 }
 

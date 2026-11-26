@@ -210,6 +210,9 @@ func (r *Runner) runSync(ctx context.Context, id int64, full bool) {
 		}
 	}
 	r.score(ctx, &state, &detail)
+	if ctx.Err() == nil {
+		r.settleSims(ctx) // 新数据到了：撮合模拟账户的待成交委托
+	}
 	r.finish(id, state, detail)
 }
 
