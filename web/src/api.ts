@@ -273,15 +273,24 @@ export type PMMarket = {
   bestBid: number; bestAsk: number; lastPrice: number; volume: number; volume24h: number; liquidity: number
   start: string; end: string; closed: boolean; accepting: boolean; tickSize: number; minSize: number
   feeType?: string; winner: number; resolution?: string
+  feeRate?: number; feeExp?: number // 吃单手续费 = 股数 × feeRate × (p(1−p))^feeExp
 }
 export type PMEvent = {
   id: string; slug: string; title: string; series?: string; tags: string[]; start: string; end: string
   closed: boolean; negRisk: boolean; volume: number; volume24h: number; liquidity: number; markets: PMMarket[]
+  priceToBeat?: number // 短期涨跌盘起始价（结束后才公布；-1 为没有）
 }
 export type PMSeriesStats = { series: string; events: number; closed: number; first: number; last: number; withHistory: number; resolved: number; firstWins: number }
 export type PMState =
   | { configured: false }
-  | { configured: true; source: string; series: string[]; status: SyncStatus; stats: PMSeriesStats[]; watched: PMEvent[] }
+  | { configured: true; source: string; series: string[]; status: SyncStatus; stats: PMSeriesStats[]; watched: PMEvent[]; book: PMBookState }
+export type PMBookTarget = { series: string; slug: string; token: string; symbol?: string; start: string; end: string }
+export type PMBookState =
+  | { configured: false }
+  | { configured: true
+      status: { running: boolean; every: string; targets: PMBookTarget[]; ticks: number; books: number; spots: number; lastRun?: string; errors: number; lastErr?: string; errAt?: string }
+      stats: { books: number; tokens: number; spots: number; first: number; last: number } }
+export type BookSnap = { t: number; bids: BookLevel[]; asks: BookLevel[] }
 export type PricePoint = { t: number; p: number }
 export type BookLevel = { price: number; size: number }
 export type Book = { token: string; time: string; bids: BookLevel[]; asks: BookLevel[] }
@@ -357,6 +366,7 @@ export const api = {
   pmSearch: (q: string) => request<PMEvent[]>('GET', `/api/pm/search?q=${encodeURIComponent(q)}`),
   pmPrices: (token: string, from = 0, to = 0, fidelity = 0) =>
     request<{ points: PricePoint[]; source: string }>('GET', `/api/pm/prices?token=${encodeURIComponent(token)}&from=${from}&to=${to}&fidelity=${fidelity}`),
+  pmBooks: (token: string, from = 0, to = 0) => request<BookSnap[]>('GET', `/api/pm/books?token=${encodeURIComponent(token)}&from=${from}&to=${to}`),
   pmBook: (token: string) => request<Book>('GET', `/api/pm/book?token=${encodeURIComponent(token)}`),
   pmWatch: (slug: string) => request<{ ok: boolean }>('POST', '/api/pm/watch', { slug }),
   pmUnwatch: (slug: string) => request<{ ok: boolean }>('DELETE', `/api/pm/watch/${encodeURIComponent(slug)}`),

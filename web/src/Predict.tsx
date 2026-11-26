@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type Book, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
+import { api, type Book, type BookSnap, type PMBookState, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 
 // 预测市场（Polymarket）：系列（短期涨跌盘）概览、搜索、关注、事件详情（价格走势 + 订单簿）。
@@ -19,6 +19,18 @@ function Outcome({ m }: { m: PMMarket }) {
   if (m.winner >= 0) return <span className={m.winner === 0 ? 'tag tag-hot' : 'tag tag-cold'}>{m.outcomes[m.winner]}</span>
   if (m.closed) return <span className="tag tag-muted">待结算</span>
   return <span className="mono">{m.outcomes[0]} {cents(m.prices[0] ?? 0)}</span>
+}
+
+function BookLine({ b }: { b: PMBookState }) {
+  if (!b.configured) return <p className="disclaimer" style={{ padding: '0 16px 12px' }}>盘口采集未启用（config.yaml 的 polymarket.book.every_ms）。</p>
+  const s = b.status, x = b.stats
+  return (
+    <p className="disclaimer" style={{ padding: '0 16px 12px' }}>
+      盘口采集：{s.running ? `运行中，每 ${s.every}` : '未运行'} · 目标 {s.targets.length} 个市场 · 本次启动写入 {s.books.toLocaleString()} 条
+      · 本地共 {x.books.toLocaleString()} 条快照、{x.spots.toLocaleString()} 个现货价{x.first > 0 && <>（{when(x.first / 1000)} ~ {when(x.last / 1000)}）</>}
+      {s.errors > 0 && <> · <span className="bad-text">连续失败 {s.errors} 次：{s.lastErr}</span></>}
+    </p>
+  )
 }
 
 function EventRow({ e }: { e: PMEvent }) {
@@ -151,6 +163,7 @@ function Home() {
             </table>
           </div>
           {state.status.log.length > 0 && <pre className="log" style={{ margin: '0 16px 16px' }}>{state.status.log.join('\n')}</pre>}
+          <BookLine b={state.book} />
         </section>
       )}
       {series && (
@@ -188,6 +201,7 @@ function EventDetail({ slug }: { slug: string }) {
   const [points, setPoints] = useState<PricePoint[]>([])
   const [priceSrc, setPriceSrc] = useState('')
   const [book, setBook] = useState<Book | null>(null)
+  const [snaps, setSnaps] = useState<BookSnap[]>([]) // 本地采集的盘口快照（第一个结果代币）
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -218,14 +232,39 @@ function EventDetail({ slug }: { slug: string }) {
     return () => window.clearInterval(id)
   }, [m, token])
 
+  // 本地盘口快照（短期盘）：未结束时每 10 秒刷新
+  useEffect(() => {
+    setSnaps([])
+    if (!m || m.tokens.length === 0) return
+    const start = secs(m.start), end = secs(m.end), span = end - start
+    if (!(span > 0 && span <= 86400 && start > 0)) return
+    const get = () => api.pmBooks(m.tokens[0], (start - span) * 1000, end * 1000).then(setSnaps, () => setSnaps([]))
+    get()
+    if (m.closed) return
+    const id = window.setInterval(get, 10000)
+    return () => window.clearInterval(id)
+  }, [m])
+
   const option = useMemo<EChartsOption | null>(() => {
-    if (points.length === 0) return null
+    if (points.length === 0 && snaps.length === 0) return null
     const ink = cssVar('--ink-2'), line = cssVar('--line'), accent = cssVar('--accent')
+    // 快照存的是第一个结果的盘口；看第二个结果时取镜像：买一 = 1 − 对方卖一，卖一 = 1 − 对方买一
+    const side = (x: BookSnap, bid: boolean) => {
+      const l = oi === 0 ? (bid ? x.bids[0] : x.asks[0]) : (bid ? x.asks[0] : x.bids[0])
+      return l ? (oi === 0 ? l.price : 1 - l.price) : null
+    }
+    // 两次快照相隔超过 15 秒（采集中断）时断开，不画横跨空档的线
+    const withGaps = (bid: boolean) => snaps.flatMap((x, i) =>
+      i > 0 && x.t - snaps[i - 1].t > 15000 ? [[snaps[i - 1].t + 1, null], [x.t, side(x, bid)]] : [[x.t, side(x, bid)]])
+    const bookSeries = snaps.length === 0 ? [] : ([['买一', true, '#d8453b'], ['卖一', false, '#1f8a4c']] as const).map(([name, bid, color]) => ({
+      name, type: 'line' as const, step: 'end' as const, showSymbol: false, connectNulls: false,
+      data: withGaps(bid), lineStyle: { width: 1, color }, itemStyle: { color },
+    }))
     const marks = m && secs(m.start) > 0 && secs(m.end) - secs(m.start) <= 86400
       ? [{ xAxis: secs(m.start) * 1000, label: { formatter: '开始计价', color: ink } }] : []
     return {
       animation: false,
-      grid: { left: 56, right: 24, top: 16, bottom: 56 },
+      grid: { left: 56, right: 24, top: 28, bottom: 56 },
       tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => (typeof v === 'number' ? cents(v) : '—') },
       xAxis: { type: 'time', axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
       yAxis: { type: 'value', min: (v: { min: number }) => Math.max(0, Math.floor((v.min - 0.02) * 50) / 50),
@@ -235,9 +274,10 @@ function EventDetail({ slug }: { slug: string }) {
         name: m?.outcomes[oi] ?? '', type: 'line', step: 'end', showSymbol: false, data: points.map((p) => [p.t * 1000, p.p]),
         lineStyle: { width: 1.6, color: accent }, itemStyle: { color: accent },
         markLine: marks.length ? { symbol: 'none', lineStyle: { color: ink, type: 'dashed' }, data: marks } : undefined,
-      }],
+      }, ...bookSeries],
+      legend: bookSeries.length ? { top: 0, left: 56, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 } : undefined,
     }
-  }, [points, m, oi])
+  }, [points, snaps, m, oi])
 
   const toggleWatch = () => {
     const p = watched ? api.pmUnwatch(slug) : api.pmWatch(slug)
@@ -310,7 +350,10 @@ function EventDetail({ slug }: { slug: string }) {
             {option ? <EChart option={option} height={360} /> : <div className="empty" style={{ height: 360 }}>暂无价格数据</div>}
             <p className="disclaimer" style={{ padding: '0 8px 12px' }}>
               计价 {when(m.start)} → {when(m.end)} · 最小单位 {m.tickSize} · 最小下单 {m.minSize}
-              {m.feeType && <> · 手续费 <span className="mono">{m.feeType}</span></>}
+              {m.feeRate ? <> · 吃单手续费 = 股数 × {m.feeRate} × p(1−p){m.feeExp && m.feeExp !== 1 ? `^${m.feeExp}` : ''}（50¢ 时约为成交额的 {(m.feeRate * 50).toFixed(1)}%）</>
+                : m.feeType ? <> · 手续费 <span className="mono">{m.feeType}</span></> : null}
+              {ev && ev.priceToBeat !== undefined && ev.priceToBeat > 0 && <> · 起始价 <span className="mono">{ev.priceToBeat.toFixed(2)}</span>（Chainlink）</>}
+              {snaps.length > 0 && <> · 本地盘口快照 {snaps.length} 条</>}
               {m.winner >= 0 && <> · 结果 <strong>{m.outcomes[m.winner]}</strong></>}
             </p>
           </section>
