@@ -30,8 +30,10 @@ import (
 
 	"market-thermometer/internal/config"
 	ds "market-thermometer/internal/datasource"
+	_ "market-thermometer/internal/datasource/binance"
 	_ "market-thermometer/internal/datasource/csindex"
 	_ "market-thermometer/internal/datasource/eastmoney"
+	_ "market-thermometer/internal/datasource/okx"
 	_ "market-thermometer/internal/datasource/stockdb"
 	_ "market-thermometer/internal/datasource/tdx"
 	_ "market-thermometer/internal/datasource/tencent"
@@ -69,6 +71,8 @@ func main() {
 		err = cmdImportBars(os.Args[2:])
 	case "ext-backfill":
 		err = cmdExtBackfill(os.Args[2:])
+	case "crypto":
+		err = cmdCrypto(os.Args[2:])
 	case "gapfill":
 		err = cmdGapFill(os.Args[2:])
 	case "score":
@@ -84,7 +88,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|crypto|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
 	os.Exit(2)
 }
 
@@ -93,6 +97,7 @@ type app struct {
 	store  *store.Store
 	hub    *ds.Hub
 	runner *job.Runner
+	crypto *job.CryptoSyncer
 }
 
 func setup(fs *flag.FlagSet, args []string) (*app, error) {
@@ -181,7 +186,33 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		fundSrcs = append(fundSrcs, src)
 	}
 	runner.SetFundNAVSources(fundSrcs)
-	return &app{cfg: cfg, store: st, hub: hub, runner: runner}, nil
+	crypto, err := buildCrypto(cfg, st)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto}, nil
+}
+
+// buildCrypto 构造加密货币 K 线数据源与同步器（未配置时返回不同步的空同步器）。
+func buildCrypto(cfg *config.Config, st *store.Store) (*job.CryptoSyncer, error) {
+	tr := &http.Transport{Proxy: nil}
+	if cfg.Crypto.Proxy && cfg.HTTPProxy != "" {
+		u, err := url.Parse(cfg.HTTPProxy)
+		if err != nil {
+			return nil, fmt.Errorf("http_proxy: %w", err)
+		}
+		tr = &http.Transport{Proxy: http.ProxyURL(u)}
+	}
+	var srcs []ds.KlineSource
+	for _, name := range cfg.Crypto.Sources {
+		s, err := ds.BuildKline(name, ds.Env{HTTP: &http.Client{Timeout: 30 * time.Second, Transport: tr}, Now: time.Now, Options: cfg.Crypto.Options[name]})
+		if err != nil {
+			return nil, err
+		}
+		srcs = append(srcs, s)
+	}
+	return job.NewCryptoSyncer(st, srcs, cfg.Crypto.Symbols, cfg.Crypto.History, time.Duration(cfg.Crypto.EveryMin)*time.Minute), nil
 }
 
 func cmdServe(args []string) error {
@@ -217,6 +248,7 @@ func cmdServe(args []string) error {
 			PasswordHash: a.cfg.AdminPasswordHash, TrustProxy: *trustProxy, Static: webui.FS(), StockSource: strings.Join(a.cfg.Stocks.SourceList(), " → "),
 			PluginOptions: builtinOptions(a.cfg),
 			Pusher:        pusher,
+			Crypto:        a.crypto,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -231,6 +263,10 @@ func cmdServe(args []string) error {
 	if *schedule {
 		go job.NewScheduler(a.runner, pusher).Run(ctx)
 		log.Printf("定时任务已启用：交易日 17:30 同步，不完整时每 30 分钟重试，22:00 截止")
+		if a.crypto.Configured() {
+			go a.crypto.Run(ctx)
+			log.Printf("加密行情同步已启用：%v", a.crypto.Symbols())
+		}
 	}
 	log.Printf("listening on http://%s  数据源: %v", a.cfg.Listen, a.hub.Sources())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
@@ -409,6 +445,24 @@ func cmdExtBackfill(args []string) error {
 		return fmt.Errorf("结束状态：%s", st.State)
 	}
 	return nil
+}
+
+func cmdCrypto(args []string) error {
+	a, err := setup(flag.NewFlagSet("crypto", flag.ExitOnError), args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	if !a.crypto.Configured() {
+		return errors.New("config.yaml 未配置 crypto.sources 与 crypto.symbols")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	err = a.crypto.SyncOnce(ctx)
+	for _, line := range a.crypto.Status().Log {
+		fmt.Println(line)
+	}
+	return err
 }
 
 func cmdGapFill(args []string) error {

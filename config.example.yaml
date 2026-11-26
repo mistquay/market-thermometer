@@ -57,3 +57,12 @@ funds:
 #     command: [python, -I, main.py]
 #     timeout_s: 60
 #     config: {path: sample.csv}
+
+# 加密货币行情（7×24）：K 线同步进本地库，供加密页与 Polymarket 短期涨跌盘策略使用。
+# 大陆网络连不上币安 / OKX：在海外服务器运行，或设 proxy: true 经 http_proxy 访问。
+crypto:
+  sources: [binance, okx]          # 按顺序回退
+  symbols: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT]
+  history: {1d: 3000, 1h: 730, 15m: 180, 5m: 30}   # 周期 → 首次回填天数
+  every_min: 15                    # mt serve 内的同步间隔
+  proxy: false

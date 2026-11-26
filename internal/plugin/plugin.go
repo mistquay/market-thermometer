@@ -18,19 +18,22 @@ import (
 type Kind string
 
 const (
-	KindMetric   Kind = "metric_source" // 指标数据源：Fetch(metric, from, to) → points
-	KindStock    Kind = "stock_source"  // 个股 / 场内基金日线源
-	KindFund     Kind = "fund_source"   // 场外基金净值源
-	KindNotifier Kind = "notifier"      // 推送渠道
-	KindDerived  Kind = "derived"       // 派生指标：只读本地数据，输出时间序列
-	KindStrategy Kind = "strategy"      // 策略：输入指标，输出得分、信号与目标仓位
-	KindBroker   Kind = "broker"        // 交易通道（只设计接口，暂不实现）
+	KindMetric     Kind = "metric_source"     // 指标数据源：Fetch(metric, from, to) → points
+	KindStock      Kind = "stock_source"      // 个股 / 场内基金日线源
+	KindFund       Kind = "fund_source"       // 场外基金净值源
+	KindNotifier   Kind = "notifier"          // 推送渠道
+	KindDerived    Kind = "derived"           // 派生指标：只读本地数据，输出时间序列
+	KindStrategy   Kind = "strategy"          // 策略：输入指标，输出得分、信号与目标仓位
+	KindBroker     Kind = "broker"            // 交易通道（只设计接口，暂不实现）
+	KindCrypto     Kind = "crypto_source"     // 加密货币 K 线与实时价
+	KindPrediction Kind = "prediction_source" // 预测市场（如 Polymarket）：事件、盘口、价格历史
 )
 
 // KindLabel 是类型的中文名。
 var KindLabel = map[Kind]string{
 	KindMetric: "指标数据源", KindStock: "个股日线源", KindFund: "基金净值源", KindNotifier: "推送渠道",
 	KindDerived: "派生指标", KindStrategy: "策略", KindBroker: "交易通道",
+	KindCrypto: "加密行情源", KindPrediction: "预测市场源",
 }
 
 // Field 是一个配置字段。

@@ -22,6 +22,17 @@ type Config struct {
 	Funds         Funds   `yaml:"funds"`
 	// Plugins 是外部进程插件。可执行文件与参数只能在这里配置（Web 不能新增或修改）。
 	Plugins []Plugin `yaml:"plugins"`
+	Crypto  Crypto   `yaml:"crypto"`
+}
+
+// Crypto 是加密货币行情配置。Sources 按顺序回退；为空时不同步。
+type Crypto struct {
+	Sources  []string                  `yaml:"sources"`
+	Symbols  []string                  `yaml:"symbols"`   // 统一写法，如 BTCUSDT
+	History  map[string]int            `yaml:"history"`   // 周期 → 首次回填的天数，如 {1d: 3000, 1h: 730}
+	EveryMin int                       `yaml:"every_min"` // 同步间隔（分钟），默认 15
+	Proxy    bool                      `yaml:"proxy"`     // 经 http_proxy 访问（大陆网络连不上币安等）
+	Options  map[string]map[string]any `yaml:"options"`
 }
 
 // Plugin 是一个外部进程插件：dir 下须有 plugin.json 清单，进程以 dir 为工作目录启动。

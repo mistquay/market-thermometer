@@ -100,6 +100,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate sim: %w", err)
 	}
+	if err := st.migrateCrypto(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate crypto: %w", err)
+	}
 	return st, nil
 }
 
