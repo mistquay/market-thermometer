@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	ds "market-thermometer/internal/datasource"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/portfolio"
@@ -200,6 +201,28 @@ func (s *Server) securitySeries(w http.ResponseWriter, r *http.Request) {
 			adj[i] = hfq[d]
 		}
 		out["dates"], out["close"], out["adjusted"] = dates, closes, adj
+		// 扩展字段（OHLC、成交量、估值）按日期对齐；没有的日子为 null
+		ext, err := s.store.StockExt(r.Context(), code)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(ext) > 0 {
+			byDate := make(map[string]ds.StockExt, len(ext))
+			for _, e := range ext {
+				byDate[e.Date] = e
+			}
+			n := len(dates)
+			open, high, low, vol, pe, pb := make([]*float64, n), make([]*float64, n), make([]*float64, n), make([]*float64, n), make([]*float64, n), make([]*float64, n)
+			for i, d := range dates {
+				if e, ok := byDate[d]; ok && e.High > 0 {
+					open[i], high[i], low[i], vol[i] = &e.Open, &e.High, &e.Low, &e.Volume
+					pe[i], pb[i] = e.PETTM, e.PB
+				}
+			}
+			out["open"], out["high"], out["low"], out["volume"], out["peTtm"], out["pb"] = open, high, low, vol, pe, pb
+			out["extFrom"] = ext[0].Date
+		}
 	case store.SecOFund:
 		navs, err := s.store.FundNAV(r.Context(), code)
 		if err != nil {

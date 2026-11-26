@@ -25,7 +25,7 @@ export type Series = { metric: string; source: string; points: Point[] }
 
 export type JobStatus = {
   id: number
-  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck' | 'gapfill' | 'names'
+  kind: 'sync' | 'backfill' | 'breadth' | 'breadth-backfill' | 'funds' | 'crosscheck' | 'gapfill' | 'names' | 'ext-backfill' | 'derived'
   state: 'running' | 'done' | 'failed' | 'partial'
   total: number
   done: number
@@ -202,7 +202,12 @@ export type PortfolioAnalysis = {
   }
 }
 
-export type SecuritySeries = { kind: string; code: string; name: string; dates: string[]; close: number[]; adjusted: number[] }
+export type SecuritySeries = {
+  kind: string; code: string; name: string; dates: string[]; close: number[]; adjusted: number[]
+  // 扩展字段（只有股票、且回填过时才有），与 dates 对齐
+  open?: (number | null)[]; high?: (number | null)[]; low?: (number | null)[]; volume?: (number | null)[]
+  peTtm?: (number | null)[]; pb?: (number | null)[]; extFrom?: string
+}
 
 export class ApiError extends Error {
   status: number
@@ -264,6 +269,7 @@ export const api = {
   jobs: () => request<JobRun[]>('GET', '/api/jobs'),
   quality: () => request<QualityReport>('GET', '/api/quality'),
   startCrossCheck: (codes: string[]) => request<JobStatus>('POST', '/api/jobs/crosscheck', { codes }),
+  startExtBackfill: () => request<JobStatus>('POST', '/api/jobs/ext-backfill'),
   startGapFill: (source: string, codes: string[]) => request<JobStatus>('POST', '/api/jobs/gapfill', { source, codes }),
   searchSecurities: (q: string) => request<{ items: SecurityHit[]; names: number }>('GET', `/api/securities/search?q=${encodeURIComponent(q)}`),
   securitySeries: (kind: string, code: string) => request<SecuritySeries>('GET', `/api/securities/${kind}/${code}/series`),

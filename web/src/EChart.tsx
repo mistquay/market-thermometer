@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
-import { HeatmapChart, LineChart } from 'echarts/charts'
+import { BarChart, CandlestickChart, HeatmapChart, LineChart } from 'echarts/charts'
 import {
   AxisPointerComponent,
   DataZoomComponent,
@@ -17,6 +17,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([
   LineChart,
   HeatmapChart,
+  CandlestickChart,
+  BarChart,
   VisualMapComponent,
   GridComponent,
   TooltipComponent,

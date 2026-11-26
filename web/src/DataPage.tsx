@@ -42,6 +42,7 @@ const JOB_TEXT: Record<string, string> = {
   crosscheck: '交叉核对',
   gapfill: '补缺口',
   names: '证券名称',
+  'ext-backfill': '回填扩展字段',
   derived: '派生指标重算',
 }
 
@@ -113,6 +114,16 @@ export default function DataPage() {
     }
   }
 
+  async function startExt() {
+    if (!confirm('从本地 stockdb 逐只读取 2015 年以来 A 股的开高低收、成交量、PE / PB、市值，供行情页 K 线与估值使用。需要 stockdb.exe 已启动；数据库约增加几百 MB；已回填的会跳过。确定开始？')) return
+    setError('')
+    try {
+      setJob(await api.startExtBackfill())
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+    }
+  }
+
   async function startSync(full: boolean) {
     if (full && !confirm('全量回填会从配置的起始日期重新拉取所有指标，确定继续？')) return
     setError('')
@@ -141,6 +152,7 @@ export default function DataPage() {
         </div>
         <div className="actions">
           <button className="btn" disabled={running} onClick={startBreadth}>回填市场广度</button>
+          <button className="btn" disabled={running} onClick={startExt}>回填 K 线与估值</button>
           <button className="btn" disabled={running} onClick={() => startSync(true)}>全量回填</button>
           <button className="btn btn-primary" disabled={running} onClick={() => startSync(false)}>
             {running ? '同步中…' : '增量同步'}
