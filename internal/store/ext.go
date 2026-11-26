@@ -30,7 +30,7 @@ func np(p *float64) any {
 	return *p
 }
 
-// SaveStockExt 写入扩展字段（同一天已有时覆盖）。
+// SaveStockExt 写入扩展字段（同一天已有时覆盖）。估值与市值为空时保留原值：有的来源（如通达信）只提供开高低与成交。
 func (s *Store) SaveStockExt(ctx context.Context, ext map[string][]ds.StockExt) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -39,7 +39,9 @@ func (s *Store) SaveStockExt(ctx context.Context, ext map[string][]ds.StockExt) 
 	defer tx.Rollback()
 	st, err := tx.PrepareContext(ctx, `INSERT INTO stock_daily_ext(code,d,open,high,low,volume,amount,pe_ttm,pb,total_mv,float_mv)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code,d) DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low,
-		volume=excluded.volume, amount=excluded.amount, pe_ttm=excluded.pe_ttm, pb=excluded.pb, total_mv=excluded.total_mv, float_mv=excluded.float_mv`)
+		volume=excluded.volume, amount=excluded.amount,
+		pe_ttm=COALESCE(excluded.pe_ttm, stock_daily_ext.pe_ttm), pb=COALESCE(excluded.pb, stock_daily_ext.pb),
+		total_mv=COALESCE(excluded.total_mv, stock_daily_ext.total_mv), float_mv=COALESCE(excluded.float_mv, stock_daily_ext.float_mv)`)
 	if err != nil {
 		return err
 	}
