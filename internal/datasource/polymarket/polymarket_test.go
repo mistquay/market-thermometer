@@ -21,7 +21,8 @@ const eventJSON = `[{"id":"1","slug":"btc-updown-15m-1795671000","title":"Bitcoi
 "clobTokenIds":"[\"111\", \"222\"]","outcomePrices":"[\"0\", \"1\"]","bestBid":0.001,"bestAsk":"0.999","volumeNum":12784.2,
 "eventStartTime":"2026-11-26T05:30:00Z","endDate":"2026-11-26T05:45:00Z","closed":true,"acceptingOrders":false,
 "orderPriceMinTickSize":0.01,"orderMinSize":5,"feeType":"crypto_btc_5m_15m_fees","umaResolutionStatus":"resolved",
-"feesEnabled":true,"feeSchedule":{"exponent":1,"rate":0.05,"takerOnly":true,"rebateRate":0.2}}]}]`
+"feesEnabled":true,"feeSchedule":{"exponent":1,"rate":0.05,"takerOnly":true,"rebateRate":0.2},
+"resolutionSource":"https://data.chain.link/streams/btc-usd-twap-60s-streams","cryptoMarketConfig":{"id":"btc-15m-twap-60","twapEnabled":true,"twapLookbackSeconds":60}}]}]`
 
 func TestEventsBookHistory(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +60,9 @@ func TestEventsBookHistory(t *testing.T) {
 	b, err := s.Book(context.Background(), "111")
 	if err != nil || b.Bids[0].Price != 0.45 || b.Asks[0].Price != 0.55 {
 		t.Fatalf("book %+v %v", b, err)
+	}
+	if m.TwapSeconds != 60 || m.ResolutionSource == "" {
+		t.Fatalf("resolution %q %d", m.ResolutionSource, m.TwapSeconds)
 	}
 	if evs[0].PriceToBeat != 60496.41636499259 || m.FeeRate != 0.05 || m.FeeExp != 1 || math.Abs(m.TakerFee(0.5, 100)-1.25) > 1e-9 {
 		t.Fatalf("ptb / fee: %v %v %v %v", evs[0].PriceToBeat, m.FeeRate, m.FeeExp, m.TakerFee(0.5, 100))

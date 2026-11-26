@@ -142,7 +142,12 @@ type gammaMarket struct {
 		Rate     flt `json:"rate"`
 		Exponent flt `json:"exponent"`
 	} `json:"feeSchedule"`
-	UMAStatus string `json:"umaResolutionStatus"`
+	UMAStatus        string `json:"umaResolutionStatus"`
+	ResolutionSource string `json:"resolutionSource"`
+	CryptoConfig     *struct {
+		TwapEnabled bool `json:"twapEnabled"`
+		Lookback    flt  `json:"twapLookbackSeconds"`
+	} `json:"cryptoMarketConfig"`
 }
 
 type gammaEvent struct {
@@ -172,6 +177,10 @@ func (m gammaMarket) convert() ds.PMMarket {
 		TickSize: float64(m.TickSize), MinSize: float64(m.MinSize), FeeType: m.FeeType, Winner: -1, Resolution: m.UMAStatus}
 	if out.Start.IsZero() {
 		out.Start = ts(m.StartDate)
+	}
+	out.ResolutionSource = m.ResolutionSource
+	if c := m.CryptoConfig; c != nil && c.TwapEnabled {
+		out.TwapSeconds = int(c.Lookback)
 	}
 	if m.FeesEnabled && m.FeeSchedule != nil {
 		out.FeeRate, out.FeeExp = float64(m.FeeSchedule.Rate), float64(m.FeeSchedule.Exponent)

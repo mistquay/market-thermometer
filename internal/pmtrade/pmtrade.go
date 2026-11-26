@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -53,6 +54,7 @@ var ErrInvalid = errors.New("无效请求")
 
 // Sim 是模拟盘 Broker：按实时（或注入的）盘口逐档吃单撮合。
 type Sim struct {
+	mu    sync.Mutex // 下单串行化：避免并发下单同时通过现金与上限检查
 	store *store.Store
 	src   ds.PredictionSource
 	now   func() time.Time
@@ -70,20 +72,18 @@ func invalid(f string, a ...any) error {
 	return fmt.Errorf("%w：%s", ErrInvalid, fmt.Sprintf(f, a...))
 }
 
-// market 找到事件与市场：本地没有时实时取并存入本地。
+// market 找到事件与市场：优先用本地（同步器与关注列表会刷新它），本地没有时才实时取并存入本地。
 func (s *Sim) market(ctx context.Context, slug, cond string) (ds.PMEvent, ds.PMMarket, error) {
 	ev, err := s.store.PMEventBySlug(ctx, slug)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !ev.Closed && s.src != nil) {
+	if errors.Is(err, sql.ErrNoRows) && s.src != nil {
 		evs, ferr := s.src.Events(ctx, ds.PMEventQuery{Slug: slug, Limit: 1})
-		switch {
-		case ferr == nil && len(evs) > 0:
-			ev, err = evs[0], s.store.SavePMEvents(context.WithoutCancel(ctx), evs[:1], s.now())
-		case err != nil: // 本地也没有
-			if ferr == nil {
-				ferr = errors.New("事件不存在")
-			}
+		if ferr == nil && len(evs) == 0 {
+			ferr = errors.New("事件不存在")
+		}
+		if ferr != nil {
 			return ev, ds.PMMarket{}, invalid("%v", ferr)
 		}
+		ev, err = evs[0], s.store.SavePMEvents(context.WithoutCancel(ctx), evs[:1], s.now())
 	}
 	if err != nil {
 		return ev, ds.PMMarket{}, err
@@ -97,6 +97,8 @@ func (s *Sim) market(ctx context.Context, slug, cond string) (ds.PMEvent, ds.PMM
 }
 
 func (s *Sim) Place(ctx context.Context, req OrderReq) (pmsim.Order, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	acct, err := s.store.PMSimAccountByID(ctx, req.Account)
 	if errors.Is(err, sql.ErrNoRows) {
 		return pmsim.Order{}, invalid("账户不存在")
@@ -195,8 +197,19 @@ func (s *Sim) Place(ctx context.Context, req OrderReq) (pmsim.Order, error) {
 		return reject(err.Error())
 	}
 	if req.Side == pmsim.Buy && o.Fill.Gross+o.Fill.Fee > view.State.Cash+1e-9 {
+		need := o.Fill.Gross + o.Fill.Fee
 		o.Fill = pmsim.Fill{}
-		return reject(fmt.Sprintf("现金不足：需要 %.2f（含手续费），现金 %.2f", o.Fill.Gross+o.Fill.Fee, view.State.Cash))
+		return reject(fmt.Sprintf("现金不足：需要 %.2f（含手续费），现金 %.2f", need, view.State.Cash))
+	}
+	if !req.DryRun {
+		// 不在同步系列里的事件（如搜索来的）：自动关注，让同步器刷新它的结果，持仓才能结算
+		if _, through, err := s.store.PMSeriesSync(ctx, ev.Series); err != nil {
+			return pmsim.Order{}, err
+		} else if ev.Series == "" || through == 0 {
+			if err := s.store.WatchPM(context.WithoutCancel(ctx), ev.Slug, now); err != nil {
+				return pmsim.Order{}, err
+			}
+		}
 	}
 	// 吃不完的部分取消（盘口深度不够或超出限价）：按股数时差 0.01 股以上、按金额时差 1 美分以上算部分成交
 	o.Status = pmsim.StatusFilled
@@ -231,15 +244,7 @@ func (s *Sim) state(ctx context.Context, acct store.PMSimAccount, mark bool) (Ac
 	if err != nil {
 		return AccountView{}, err
 	}
-	seen := map[string]bool{}
-	var conds []string
-	for _, o := range orders {
-		if !seen[o.Cond] {
-			seen[o.Cond] = true
-			conds = append(conds, o.Cond)
-		}
-	}
-	markets, err := s.store.PMSimMarkets(ctx, conds)
+	markets, err := s.store.PMSimMarkets(ctx, acct.ID)
 	if err != nil {
 		return AccountView{}, err
 	}

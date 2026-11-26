@@ -79,6 +79,10 @@ func TestSimBroker(t *testing.T) {
 	if err != nil || o.ID == 0 || o.Status != pmsim.StatusFilled || o.Fill.Shares != 39.23 {
 		t.Fatalf("buy %+v %v", o, err)
 	}
+	// 不在同步系列里的事件：成交后自动关注（让同步器刷新结果）
+	if w, _ := st.PMWatched(ctx); len(w) != 1 || w[0] != ev.Slug {
+		t.Fatalf("auto watch %v", w)
+	}
 	// 卖出超过持仓：拒单并记账
 	o, err = b.Place(ctx, OrderReq{Account: id, Slug: ev.Slug, Outcome: 0, Side: pmsim.Sell, Shares: 50})
 	if err != nil || o.Status != pmsim.StatusRejected || o.ID == 0 {

@@ -112,6 +112,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate pm sim: %w", err)
 	}
+	if err := st.migratePMSignal(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate pm signal: %w", err)
+	}
 	return st, nil
 }
 

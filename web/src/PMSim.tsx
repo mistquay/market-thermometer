@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type PMAccountView, type PMMarket, type PMOrder, type PMSimParams } from './api'
+import { api, type PMAccountView, type PMMarket, type PMOrder, type PMShadowStatus, type PMSignal, type PMSimParams } from './api'
 
 // 预测市场模拟盘：账户列表与全局熔断（预测页首页）、账户详情（#/predict/acct/<id>）、下单面板（事件详情）。
 // 成交模型：按实时盘口逐档吃单（IOC），吃不完的取消；手续费按每档成交价计算；结算按市场结果。见 docs/polymarket.md §7。
@@ -201,7 +201,11 @@ export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; o
   if (accts.length === 0) return <p className="disclaimer" style={{ padding: '0 16px 12px' }}>模拟下单：先在预测页新建一个模拟账户。</p>
   const held = accts.find((a) => a.account.id === acct)?.state.positions?.find((p) => p.token === m.tokens[outcome] && !p.settled)?.shares ?? 0
   const req = (dryRun: boolean) => {
-    const n = Number(qty), l = limit ? Number(limit) / 100 : 0
+    const n = Number(qty)
+    // 没填限价时，下单用试算的最差成交价作限价：试算与下单之间盘口变差时不会以更差的价格成交
+    const levels = preview?.fill.levels ?? []
+    const worst = !dryRun && levels.length ? (side === 'buy' ? Math.max(...levels.map((x) => x.price)) : Math.min(...levels.map((x) => x.price))) : 0
+    const l = limit ? Number(limit) / 100 : worst
     if (!(n > 0)) return setError('数量应为正数')
     setError('')
     const amountMode = side === 'buy' && mode === 'amount'
@@ -237,11 +241,83 @@ export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; o
         <span className="muted small">{mode === 'amount' && side === 'buy' ? '美元' : '股'}</span>
         <input style={{ width: 80 }} value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="限价 ¢" title={side === 'buy' ? '最高买价（美分），空为不限' : '最低卖价（美分），空为不限'} />
         <button className="btn" onClick={() => req(true)}>试算</button>
-        <button className="btn btn-primary" disabled={!preview || preview.status === 'rejected'} onClick={() => req(false)} title="先试算再下单">下单</button>
+        <button className="btn btn-primary" disabled={!preview || preview.status === 'rejected'} onClick={() => req(false)} title="先试算再下单；没填限价时以试算的最差成交价为限价">下单</button>
       </div>
       {error && <p className="bad-text small">{error}</p>}
       {preview && show(preview, '试算（实时盘口）')}
       {result && show(result, `已提交 #${result.id}`)}
     </div>
+  )
+}
+
+/** 策略影子模式面板：进行中市场的实时估值与最近信号（只记录、不下单）。 */
+export function ShadowPanel({ s }: { s: PMShadowStatus }) {
+  const [sigs, setSigs] = useState<PMSignal[]>([])
+  useEffect(() => { api.pmSignals(Date.now() - 24 * 3600_000).then(setSigs, () => setSigs([])) }, [s.signals])
+  const evals = (s.evals ?? []).filter((e) => e.ok || e.reason !== '未开始')
+  const settled = sigs.filter((x) => x.winner >= 0)
+  const pnl = (x: PMSignal) => (x.winner === x.outcome ? 1 : 0) - x.ask - x.feeRate * x.ask * (1 - x.ask)
+  const edge = (x: number) => <span className={x >= s.minEdge ? 'warn-text' : x > 0 ? '' : 'muted'}>{(x * 100).toFixed(1)}¢</span>
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <strong>策略 · 影子模式</strong>
+        <span className="muted small">
+          {s.strategy}：按币安现价（换算成 Chainlink 口径）估计 P(Up)，与盘口卖一 + 手续费比较，预期收益 ≥ {(s.minEdge * 100).toFixed(0)}¢ / 股时记录信号，不下单
+          · 基差 {Object.entries(s.basis).map(([a, b]) => `${a} ${(b * 1e4).toFixed(1)}bp（${s.basisN[a]} 个点）`).join('、') || '未校准'}
+          · 本次启动记录 {s.signals} 条
+          {s.lastErr && <> · <span className="bad-text">{s.lastErr}</span></>}
+        </span>
+      </div>
+      <div className="table-scroll">
+        <table className="table static">
+          <thead><tr><th>市场</th><th className="num">剩余</th><th className="num">起始价</th><th className="num">现价</th><th className="num">P(Up)</th><th className="num">Up 买一 / 卖一</th><th className="num">Down 卖一</th><th className="num">买 Up 预期</th><th className="num">买 Down 预期</th></tr></thead>
+          <tbody>
+            {evals.map((e) => (
+              <tr key={e.target.conditionId}>
+                <td><a className="link" href={`#/predict/${e.target.slug}`}>{e.target.series.replace('-up-or-down-', ' ')}</a></td>
+                {e.ok ? <>
+                  <td className="num mono">{e.tau}s</td>
+                  <td className="num mono" title={e.kSrc === 'exact' ? '同一时刻已结算的起始价（精确）' : '开始前 60 秒币安均价按基差换算（估计）'}>{e.k.toFixed(2)}{e.kSrc === 'exact' ? '' : '*'}</td>
+                  <td className="num mono">{e.spot.toFixed(2)}</td>
+                  <td className="num mono"><strong>{(e.p * 100).toFixed(1)}%</strong></td>
+                  <td className="num mono">{cents(e.bidUp)} / {cents(e.askUp)}</td>
+                  <td className="num mono">{cents(e.askDn)}</td>
+                  <td className="num mono">{edge(e.edgeUp)}</td>
+                  <td className="num mono">{edge(e.edgeDn)}</td>
+                </> : <td colSpan={8} className="muted">{e.reason}</td>}
+              </tr>
+            ))}
+            {evals.length === 0 && <tr><td colSpan={9} className="muted">没有进行中的市场。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <p className="disclaimer" style={{ padding: '0 16px' }}>起始价带 * 的是估计值。预期收益 = 模型概率 − 卖一 − 每股手续费，未计深度与延迟。</p>
+      <div className="panel-head"><strong>最近 24 小时信号</strong>
+        <span className="muted small">{sigs.length} 条，已出结果 {settled.length} 条。按信号时的卖一买 1 股的结果仅作记录：样本少、未计深度与延迟，不作为策略结论。</span>
+      </div>
+      <div className="table-scroll scroll-y">
+        <table className="table static">
+          <thead><tr><th>时间</th><th>市场</th><th>结果</th><th className="num">剩余</th><th className="num">模型概率</th><th className="num">卖一（量）</th><th className="num">预期</th><th>起始价</th><th>结算</th><th className="num">每股结果</th></tr></thead>
+          <tbody>
+            {sigs.slice(0, 100).map((x) => (
+              <tr key={x.id}>
+                <td className="mono small nowrap">{hms(new Date(x.t).toISOString())}</td>
+                <td><a className="link" href={`#/predict/${x.slug}`}>{x.slug}</a></td>
+                <td>{x.outcome === 0 ? 'Up' : 'Down'}</td>
+                <td className="num mono">{x.tau}s</td>
+                <td className="num mono">{(x.p * 100).toFixed(1)}%</td>
+                <td className="num mono">{cents(x.ask)}（{x.askSize.toFixed(0)}）</td>
+                <td className="num mono">{(x.edge * 100).toFixed(1)}¢</td>
+                <td className="small">{x.kSrc === 'exact' ? '精确' : '估计'}</td>
+                <td>{x.winner < 0 ? <span className="muted">未出</span> : x.winner === 0 ? 'Up' : 'Down'}</td>
+                <td className="num mono">{x.winner < 0 ? '' : signed(pnl(x))}</td>
+              </tr>
+            ))}
+            {sigs.length === 0 && <tr><td colSpan={10} className="muted">还没有信号。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

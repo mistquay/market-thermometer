@@ -105,6 +105,7 @@ type app struct {
 	crypto *job.CryptoSyncer
 	pm     *job.PMSyncer
 	pmBook *job.PMBookCollector
+	shadow *job.PMShadow
 }
 
 func setup(fs *flag.FlagSet, args []string) (*app, error) {
@@ -214,7 +215,12 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 			pmBook.WithSpot(crypto.Price)
 		}
 	}
-	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook}, nil
+	var shadow *job.PMShadow
+	if pmBook != nil && cfg.Polymarket.Strategy.Shadow {
+		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge)
+		pmBook.OnTick(shadow.Tick)
+	}
+	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook, shadow: shadow}, nil
 }
 
 // outboundTransport 返回出站请求的 Transport：proxy=true 且配置了 http_proxy 时经代理，否则直连。
@@ -298,6 +304,7 @@ func cmdServe(args []string) error {
 			Crypto:        a.crypto,
 			PM:            a.pm,
 			PMBook:        a.pmBook,
+			PMShadow:      a.shadow,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

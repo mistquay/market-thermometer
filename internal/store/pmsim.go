@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"strings"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -158,18 +157,11 @@ func (s *Store) PMSimOrders(ctx context.Context, account int64) ([]pmsim.Order, 
 	return out, rows.Err()
 }
 
-// PMSimMarkets 读取委托涉及的市场（回放结算、估值用）。
-func (s *Store) PMSimMarkets(ctx context.Context, conds []string) (map[string]pmsim.Market, error) {
+// PMSimMarkets 读取账户委托涉及的市场（回放结算、估值用）。
+func (s *Store) PMSimMarkets(ctx context.Context, account int64) (map[string]pmsim.Market, error) {
 	out := map[string]pmsim.Market{}
-	if len(conds) == 0 {
-		return out, nil
-	}
-	args := make([]any, len(conds))
-	for i, c := range conds {
-		args[i] = c
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT m.condition_id, m.data, m.winner, e.slug FROM pm_market m JOIN pm_event e ON e.id=m.event_id
-		WHERE m.condition_id IN (?`+strings.Repeat(",?", len(conds)-1)+`)`, args...)
+		WHERE m.condition_id IN (SELECT DISTINCT cond FROM pm_sim_order WHERE account_id=?)`, account)
 	if err != nil {
 		return nil, err
 	}

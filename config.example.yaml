@@ -80,3 +80,6 @@ polymarket:
     levels: 10                     # 每边保存的档数
     keep_days: 14                  # 保留天数
     # series: [btc-up-or-down-5m]  # 默认与上面的 series 相同
+  strategy:                       # 短期涨跌盘公允概率策略（需要 book）
+    shadow: true                   # 影子模式：每轮采集后计算 P(Up)，与盘口比较，只记录信号、不下单
+    min_edge: 0.03                 # 记录信号的最小预期收益（每股美元，已扣手续费）

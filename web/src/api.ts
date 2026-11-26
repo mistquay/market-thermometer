@@ -283,14 +283,26 @@ export type PMEvent = {
 export type PMSeriesStats = { series: string; events: number; closed: number; first: number; last: number; withHistory: number; resolved: number; firstWins: number }
 export type PMState =
   | { configured: false }
-  | { configured: true; source: string; series: string[]; status: SyncStatus; stats: PMSeriesStats[]; watched: PMEvent[]; book: PMBookState }
-export type PMBookTarget = { series: string; slug: string; token: string; symbol?: string; start: string; end: string }
+  | { configured: true; source: string; series: string[]; status: SyncStatus; stats: PMSeriesStats[]; watched: PMEvent[]; book: PMBookState; shadow?: PMShadowStatus }
+export type PMBookTarget = { series: string; slug: string; token: string; symbol?: string; start: string; end: string; conditionId: string; feeRate?: number }
 export type PMBookState =
   | { configured: false }
   | { configured: true
       status: { running: boolean; every: string; targets: PMBookTarget[]; ticks: number; books: number; spots: number; lastRun?: string; errors: number; lastErr?: string; errAt?: string }
       stats: { books: number; tokens: number; spots: number; first: number; last: number } }
 export type BookSnap = { t: number; bids: BookLevel[]; asks: BookLevel[] }
+export type PMEval = {
+  target: PMBookTarget; ok: boolean; reason?: string; p: number; bidUp: number; askUp: number; askDn: number
+  edgeUp: number; edgeDn: number; k: number; kSrc: string; spot: number; sdBp: number; tau: number; at: string
+}
+export type PMShadowStatus = {
+  strategy: string; minEdge: number; evals: PMEval[] | null; signals: number; basis: Record<string, number>; basisN: Record<string, number>
+  sigma: Record<string, number>; lastTick?: string; lastErr?: string; errAt?: string
+}
+export type PMSignal = {
+  id: number; t: number; strategy: string; slug: string; conditionId: string; outcome: number; p: number; ask: number; askSize: number
+  feeRate: number; edge: number; k: number; kSrc: string; sdBp: number; tau: number; spot: number; basis: number; winner: number
+}
 export type PricePoint = { t: number; p: number }
 export type BookLevel = { price: number; size: number }
 export type Book = { token: string; time: string; bids: BookLevel[]; asks: BookLevel[] }
@@ -389,6 +401,7 @@ export const api = {
   pmSearch: (q: string) => request<PMEvent[]>('GET', `/api/pm/search?q=${encodeURIComponent(q)}`),
   pmPrices: (token: string, from = 0, to = 0, fidelity = 0) =>
     request<{ points: PricePoint[]; source: string }>('GET', `/api/pm/prices?token=${encodeURIComponent(token)}&from=${from}&to=${to}&fidelity=${fidelity}`),
+  pmSignals: (since = 0) => request<PMSignal[]>('GET', `/api/pm/signals?since=${since}`),
   pmBooks: (token: string, from = 0, to = 0) => request<BookSnap[]>('GET', `/api/pm/books?token=${encodeURIComponent(token)}&from=${from}&to=${to}`),
   pmBook: (token: string) => request<Book>('GET', `/api/pm/book?token=${encodeURIComponent(token)}`),
   pmWatch: (slug: string) => request<{ ok: boolean }>('POST', '/api/pm/watch', { slug }),

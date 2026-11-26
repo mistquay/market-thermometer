@@ -53,10 +53,14 @@ type PMMarket struct {
 	MinSize     float64   `json:"minSize"`
 	FeeType     string    `json:"feeType,omitempty"`
 	// 吃单手续费（USDC）= 股数 × FeeRate × (p × (1 − p))^FeeExp；挂单不收。FeeRate 为 0 表示不收费
-	FeeRate    float64 `json:"feeRate,omitempty"`
-	FeeExp     float64 `json:"feeExp,omitempty"`
-	Winner     int     `json:"winner"` // 已结算的赢家结果下标；未结算为 -1
-	Resolution string  `json:"resolution,omitempty"`
+	FeeRate float64 `json:"feeRate,omitempty"`
+	FeeExp  float64 `json:"feeExp,omitempty"`
+	// 结算来源：ResolutionSource 为市场给出的链接；TwapSeconds > 0 表示按 Chainlink 的 N 秒 TWAP 结算
+	// （2026-11-18 起的 5m / 15m / 1h 涨跌盘），为 0 且来源是币安时按币安 K 线开收盘结算（此前的 1h 盘）。
+	ResolutionSource string `json:"resolutionSource,omitempty"`
+	TwapSeconds      int    `json:"twapSeconds,omitempty"`
+	Winner           int    `json:"winner"` // 已结算的赢家结果下标；未结算为 -1
+	Resolution       string `json:"resolution,omitempty"`
 }
 
 // PMEventQuery 是事件查询条件。

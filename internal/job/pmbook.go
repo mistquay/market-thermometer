@@ -29,6 +29,7 @@ type PMBookCollector struct {
 	now    func() time.Time
 	logf   func(string, ...any)
 
+	onTick       []TickFunc
 	refreshEvery time.Duration // 目标市场列表多久从本地库刷新一次
 	lastHash     map[string]string
 	keys         map[string]int64
@@ -53,7 +54,12 @@ type PMBookTarget struct {
 	Symbol string    `json:"symbol,omitempty"` // 对应的现货品种
 	Start  time.Time `json:"start"`
 	End    time.Time `json:"end"`
+	Cond   string    `json:"conditionId"`
+	Fee    float64   `json:"feeRate,omitempty"` // 吃单费率
 }
+
+// TickFunc 在每轮采集成功后调用：本轮全部目标、全部订单簿（含没变化的）与现货价。
+type TickFunc func(ctx context.Context, now time.Time, targets []PMBookTarget, books []ds.Book, spots []store.PMSpot)
 
 func NewPMBookCollector(st *store.Store, src ds.PredictionSource, series []string, every time.Duration, levels, keepDays int) *PMBookCollector {
 	if every <= 0 {
@@ -68,6 +74,9 @@ func NewPMBookCollector(st *store.Store, src ds.PredictionSource, series []strin
 	return &PMBookCollector{store: st, src: src, series: series, every: every, levels: levels, keep: time.Duration(keepDays) * 24 * time.Hour,
 		now: time.Now, logf: log.Printf, refreshEvery: 30 * time.Second, lastHash: map[string]string{}, keys: map[string]int64{}}
 }
+
+// OnTick 注册每轮采集后的回调（如策略影子模式）。在采集 goroutine 里同步调用，回调应尽快返回。
+func (c *PMBookCollector) OnTick(f TickFunc) { c.onTick = append(c.onTick, f) }
 
 // WithSpot 设置现货价来源（如加密行情同步器的 Price）。
 func (c *PMBookCollector) WithSpot(f func(ctx context.Context, symbol string) (float64, string, error)) *PMBookCollector {
@@ -169,7 +178,8 @@ func (c *PMBookCollector) refreshTargets(ctx context.Context) error {
 				if len(m.Tokens) == 0 {
 					continue
 				}
-				out = append(out, PMBookTarget{Series: s, Slug: e.Slug, Token: m.Tokens[0], Symbol: SpotSymbol(s), Start: m.Start, End: m.End})
+				out = append(out, PMBookTarget{Series: s, Slug: e.Slug, Token: m.Tokens[0], Symbol: SpotSymbol(s), Start: m.Start, End: m.End,
+					Cond: m.ConditionID, Fee: m.FeeRate})
 			}
 		}
 	}
@@ -257,6 +267,9 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 	c.ticks++
 	c.lastRun, c.errs = now, 0
 	c.mu.Unlock()
+	for _, f := range c.onTick {
+		f(ctx, now, targets, books, spots)
+	}
 	return nil
 }
 

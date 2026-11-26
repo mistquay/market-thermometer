@@ -33,6 +33,7 @@ type Options struct {
 	Crypto        *job.CryptoSyncer    // 加密行情同步器；为 nil 时加密页显示未配置
 	PM            *job.PMSyncer        // Polymarket 同步器；为 nil 时预测市场页显示未配置
 	PMBook        *job.PMBookCollector // 盘口采集器；为 nil 时不采集
+	PMShadow      *job.PMShadow        // 策略影子模式；为 nil 时未启用
 }
 
 type Server struct {
@@ -125,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/pm/prices", s.auth(s.pmPrices))
 	api.HandleFunc("GET /api/pm/book", s.auth(s.pmBook))
 	api.HandleFunc("GET /api/pm/books", s.auth(s.pmBooks))
+	api.HandleFunc("GET /api/pm/signals", s.auth(s.pmSignals))
 	api.HandleFunc("POST /api/pm/watch", s.auth(s.pmWatch))
 	api.HandleFunc("DELETE /api/pm/watch/{slug}", s.auth(s.pmUnwatch))
 	api.HandleFunc("POST /api/pm/sync", s.auth(s.startPMSync))

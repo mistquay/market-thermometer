@@ -72,8 +72,23 @@ func (s *Server) pmState(w http.ResponseWriter, r *http.Request) {
 		}
 		book["status"], book["stats"] = s.opt.PMBook.Status(), bs
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"configured": true, "source": p.Source().Name(), "series": p.Series(),
-		"status": p.Status(), "stats": stats, "watched": watched, "book": book})
+	out := map[string]any{"configured": true, "source": p.Source().Name(), "series": p.Series(),
+		"status": p.Status(), "stats": stats, "watched": watched, "book": book}
+	if s.opt.PMShadow != nil {
+		out["shadow"] = s.opt.PMShadow.Status()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// pmSignals 返回最近的策略信号（带市场结果），since 为 Unix 毫秒，最多 500 条。
+func (s *Server) pmSignals(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	sigs, err := s.store.PMSignals(r.Context(), since, 500)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sigs)
 }
 
 // pmBooks 返回本地采集的盘口快照（Unix 毫秒区间，最多 5,000 条）。

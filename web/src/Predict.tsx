@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Book, type BookSnap, type PMBookState, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
-import { AccountPage, OrderTicket, SimPanel } from './PMSim'
+import { AccountPage, OrderTicket, ShadowPanel, SimPanel } from './PMSim'
 
 // 预测市场（Polymarket）：系列（短期涨跌盘）概览、搜索、关注、事件详情（价格走势 + 订单簿）。
 
@@ -119,6 +119,7 @@ function Home() {
           </ul>
         )}
       </section>
+      {state?.configured && state.shadow && <ShadowPanel s={state.shadow} />}
       {state?.configured && <SimPanel />}
       {state?.configured && state.watched.length > 0 && (
         <section className="panel">

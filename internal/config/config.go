@@ -34,6 +34,13 @@ type Polymarket struct {
 	EveryMin    int      `yaml:"every_min"`    // 同步间隔（分钟），默认 10
 	Proxy       bool     `yaml:"proxy"`        // 经 http_proxy 访问
 	Book        PMBook   `yaml:"book"`
+	Strategy    PMStrat  `yaml:"strategy"`
+}
+
+// PMStrat 是策略配置。Shadow 为 true 时在盘口采集的每一轮计算短期涨跌盘的公允概率，只记录信号、不下单（需要启用 book）。
+type PMStrat struct {
+	Shadow  bool    `yaml:"shadow"`
+	MinEdge float64 `yaml:"min_edge"` // 记录信号的最小预期收益（每股美元，已扣手续费），默认 0.03
 }
 
 // PMBook 是盘口采集配置：EveryMs 为 0 时不采集。
