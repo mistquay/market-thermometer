@@ -295,6 +295,29 @@ export type PricePoint = { t: number; p: number }
 export type BookLevel = { price: number; size: number }
 export type Book = { token: string; time: string; bids: BookLevel[]; asks: BookLevel[] }
 
+// ---- 预测市场模拟盘 ----
+export type PMSimParams = { maxOrderUsd: number; maxDailyUsd: number; maxMarketUsd: number; halted: boolean }
+export type PMFill = { shares: number; gross: number; fee: number; levels: BookLevel[] | null }
+export type PMOrder = {
+  id: number; account: number; time: string; slug: string; conditionId: string; token: string; outcome: number; outcomeName: string
+  question: string; side: 'buy' | 'sell'; reqShares?: number; reqAmount?: number; limit?: number; source: string
+  status: 'filled' | 'partial' | 'rejected'; reason?: string; fill: PMFill; bookTime?: string
+}
+export type PMPosition = {
+  conditionId: string; slug: string; question: string; token: string; outcome: number; outcomeName: string
+  shares: number; cost: number; end: string; settled: boolean; payout?: number; mark?: number
+}
+export type PMSimAccount = { id: number; name: string; cash: number; params: PMSimParams; note: string; createdAt: string }
+export type PMAccountView = {
+  account: PMSimAccount
+  state: { cash: number; positions: PMPosition[] | null; realized: number; fees: number; volume: number; orders: number }
+  equity: number; unrealized: number; orders: PMOrder[] | null; globalHalt: boolean
+}
+export type PMOrderReq = {
+  account: number; slug: string; conditionId?: string; outcome: number; side: 'buy' | 'sell'
+  shares?: number; amount?: number; limit?: number; dryRun?: boolean
+}
+
 export const api = {
   me: () => request<{ ok: boolean }>('GET', '/api/auth/me'),
   login: (password: string) => request<{ ok: boolean }>('POST', '/api/auth/login', { password }),
@@ -371,4 +394,11 @@ export const api = {
   pmWatch: (slug: string) => request<{ ok: boolean }>('POST', '/api/pm/watch', { slug }),
   pmUnwatch: (slug: string) => request<{ ok: boolean }>('DELETE', `/api/pm/watch/${encodeURIComponent(slug)}`),
   syncPM: () => request<{ ok: boolean }>('POST', '/api/pm/sync'),
+  pmSim: () => request<{ accounts: PMAccountView[]; globalHalt: boolean; defaults: PMSimParams }>('GET', '/api/pm/sim'),
+  pmSimCreate: (name: string, cash: number, params?: PMSimParams) => request<{ id: number }>('POST', '/api/pm/sim/accounts', { name, cash, params }),
+  pmSimAccount: (id: number) => request<PMAccountView>('GET', `/api/pm/sim/accounts/${id}`),
+  pmSimParams: (id: number, p: PMSimParams) => request<{ ok: boolean }>('PUT', `/api/pm/sim/accounts/${id}/params`, p),
+  pmSimDelete: (id: number) => request<{ ok: boolean }>('DELETE', `/api/pm/sim/accounts/${id}`),
+  pmSimOrder: (o: PMOrderReq) => request<PMOrder>('POST', '/api/pm/sim/orders', o),
+  pmHalt: (on: boolean) => request<{ on: boolean }>('POST', '/api/pm/halt', { on }),
 }

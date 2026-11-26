@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type Book, type BookSnap, type PMBookState, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
+import { AccountPage, OrderTicket, SimPanel } from './PMSim'
 
 // 预测市场（Polymarket）：系列（短期涨跌盘）概览、搜索、关注、事件详情（价格走势 + 订单簿）。
 
@@ -51,6 +52,8 @@ export default function Predict() {
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
+  const acct = /^#\/?predict\/acct\/(\d+)/.exec(location.hash)
+  if (slug === 'acct' && acct) return <AccountPage id={Number(acct[1])} />
   return slug ? <EventDetail slug={slug} /> : <Home />
 }
 
@@ -116,6 +119,7 @@ function Home() {
           </ul>
         )}
       </section>
+      {state?.configured && <SimPanel />}
       {state?.configured && state.watched.length > 0 && (
         <section className="panel">
           <div className="panel-head"><strong>关注</strong></div>
@@ -356,6 +360,7 @@ function EventDetail({ slug }: { slug: string }) {
               {snaps.length > 0 && <> · 本地盘口快照 {snaps.length} 条</>}
               {m.winner >= 0 && <> · 结果 <strong>{m.outcomes[m.winner]}</strong></>}
             </p>
+            {ev && <OrderTicket slug={ev.slug} m={m} outcome={oi} />}
           </section>
           <section className="panel">
             <div className="panel-head">

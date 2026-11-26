@@ -108,6 +108,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate polymarket: %w", err)
 	}
+	if err := st.migratePMSim(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate pm sim: %w", err)
+	}
 	return st, nil
 }
 

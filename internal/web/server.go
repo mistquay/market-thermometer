@@ -18,6 +18,7 @@ import (
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
 	"market-thermometer/internal/notify"
+	"market-thermometer/internal/pmtrade"
 	"market-thermometer/internal/store"
 )
 
@@ -42,7 +43,8 @@ type Server struct {
 	pusher  *job.Pusher
 	limiter *loginLimiter
 
-	stockSource string // 个股数据源名称，仅用于展示
+	pmSim       *pmtrade.Sim // 预测市场模拟盘；未配置预测市场时为 nil
+	stockSource string       // 个股数据源名称，仅用于展示
 	now         func() time.Time
 }
 
@@ -52,7 +54,11 @@ func New(opt Options, st *store.Store, hub *ds.Hub, runner *job.Runner) *Server 
 		c := &http.Client{Timeout: 30 * time.Second}
 		pusher = job.NewPusher(st, notify.Env{HTTP: c, Proxy: c}, market.CN)
 	}
-	return &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, pusher: pusher, limiter: newLoginLimiter(), now: time.Now}
+	srv := &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, pusher: pusher, limiter: newLoginLimiter(), now: time.Now}
+	if opt.PM.Configured() {
+		srv.pmSim = pmtrade.NewSim(st, opt.PM.Source())
+	}
+	return srv
 }
 
 func (s *Server) Handler() http.Handler {
@@ -122,6 +128,13 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/pm/watch", s.auth(s.pmWatch))
 	api.HandleFunc("DELETE /api/pm/watch/{slug}", s.auth(s.pmUnwatch))
 	api.HandleFunc("POST /api/pm/sync", s.auth(s.startPMSync))
+	api.HandleFunc("GET /api/pm/sim", s.auth(s.pmSimState))
+	api.HandleFunc("POST /api/pm/sim/accounts", s.auth(s.createPMSimAccount))
+	api.HandleFunc("GET /api/pm/sim/accounts/{id}", s.auth(s.pmSimAccount))
+	api.HandleFunc("PUT /api/pm/sim/accounts/{id}/params", s.auth(s.setPMSimParams))
+	api.HandleFunc("DELETE /api/pm/sim/accounts/{id}", s.auth(s.deletePMSimAccount))
+	api.HandleFunc("POST /api/pm/sim/orders", s.auth(s.placePMSimOrder))
+	api.HandleFunc("POST /api/pm/halt", s.auth(s.setPMHalt))
 	api.HandleFunc("GET /api/jobs/current", s.auth(s.currentJob))
 	api.HandleFunc("GET /api/jobs", s.auth(s.recentJobs))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
