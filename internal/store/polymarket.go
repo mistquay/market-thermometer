@@ -301,10 +301,12 @@ func (s *Store) HasPMPrices(ctx context.Context, token string) (bool, error) {
 	return n > 0, err
 }
 
-// PMUnresolved 返回系列中已关闭但还没有赢家的事件 slug（结束时间 >= from，按结束时间倒序，最多 limit 个）。
-func (s *Store) PMUnresolved(ctx context.Context, series string, from int64, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT e.slug FROM pm_event e JOIN pm_market m ON m.event_id=e.id
-		WHERE e.series=? AND e.end_t>=? AND m.closed=1 AND m.winner<0 ORDER BY e.end_t DESC LIMIT ?`, series, from, limit)
+// PMUnresolved 返回系列中需要刷新的事件 slug：已关闭但还没有赢家的，或结束时间已过（< now）但本地仍未关闭的。
+// 只看结束时间 >= from 的，按结束时间倒序，最多 limit 个。
+func (s *Store) PMUnresolved(ctx context.Context, series string, from, now int64, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT e.slug FROM pm_event e WHERE e.series=? AND e.end_t>=? AND (
+		(e.closed=0 AND e.end_t<?) OR EXISTS(SELECT 1 FROM pm_market m WHERE m.event_id=e.id AND m.closed=1 AND m.winner<0))
+		ORDER BY e.end_t DESC LIMIT ?`, series, from, now, limit)
 	if err != nil {
 		return nil, err
 	}

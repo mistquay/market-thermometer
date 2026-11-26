@@ -248,7 +248,8 @@ function EventDetail({ slug }: { slug: string }) {
   // 互斥多结果：买齐所有 Yes 的成本（卖一之和）低于 1 即为套利（未计手续费与深度）；卖出所有 Yes 的所得（买一之和）高于 1 同理
   const open = ev?.markets.filter((x) => !x.closed) ?? []
   const sums = ev?.negRisk && open.length > 1
-    ? { ask: open.reduce((a, x) => a + x.bestAsk, 0), bid: open.reduce((a, x) => a + x.bestBid, 0) } : null
+    ? { ask: open.reduce((a, x) => a + x.bestAsk, 0), bid: open.reduce((a, x) => a + x.bestBid, 0),
+        askOk: open.every((x) => x.bestAsk > 0), bidOk: open.every((x) => x.bestBid > 0) } : null // 有市场缺卖一 / 买一时合计不可比
   return (
     <div className="page">
       <div className="page-head">
@@ -272,8 +273,8 @@ function EventDetail({ slug }: { slug: string }) {
             <div className="panel-head">
               <strong>Yes 合计</strong>
               <span className="muted">
-                卖一之和 <span className={sums.ask < 1 ? 'warn-text' : 'mono'}>{cents(sums.ask)}</span>（买齐全部 Yes 的成本）·
-                买一之和 <span className={sums.bid > 1 ? 'warn-text' : 'mono'}>{cents(sums.bid)}</span>（卖出全部 Yes 的所得）·
+                卖一之和 {sums.askOk ? <span className={sums.ask < 1 ? 'warn-text' : 'mono'}>{cents(sums.ask)}</span> : '不全（有市场没有卖单）'}（买齐全部 Yes 的成本）·
+                买一之和 {sums.bidOk ? <span className={sums.bid > 1 ? 'warn-text' : 'mono'}>{cents(sums.bid)}</span> : '不全（有市场没有买单）'}（卖出全部 Yes 的所得）·
                 未计手续费与盘口深度，事件加载时的快照
               </span>
             </div>

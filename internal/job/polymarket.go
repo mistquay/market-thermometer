@@ -128,9 +128,10 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget int) (e
 	}
 	horizon := p.now().Add(-time.Duration(p.historyDays) * 24 * time.Hour).Unix()
 	// 已连续覆盖到回溯起点（留 1 天余量，日级系列一天才一个事件）就只拉 through 之后的；否则一直翻到回溯起点
+	// 每轮往回多翻 2 小时：结束后晚一些才标记关闭的事件、以及刚关闭时成交额还没定稿的事件都能被覆盖到
 	stop := horizon
 	if through > 0 && since <= horizon+86400 {
-		stop = max(through, horizon)
+		stop = max(through-2*3600, horizon)
 	} else {
 		since = horizon
 	}
@@ -164,8 +165,8 @@ func (p *PMSyncer) syncSeries(ctx context.Context, series string, budget int) (e
 	if err := p.store.SetPMSeriesSync(context.WithoutCancel(ctx), series, since, newest); err != nil {
 		return events, hist, err
 	}
-	// 已关闭但还没出结果的（刚结束、结算有延迟）：按 slug 批量刷新，每轮最多 60 个
-	pending, err := p.store.PMUnresolved(ctx, series, horizon, 60)
+	// 已关闭但还没出结果的、已过结束时间但本地仍是未关闭的：按 slug 批量刷新，每轮最多 60 个
+	pending, err := p.store.PMUnresolved(ctx, series, horizon, p.now().Unix(), 60)
 	if err != nil {
 		return events, hist, err
 	}

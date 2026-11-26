@@ -16,13 +16,14 @@ type fakePM struct {
 	now       time.Time
 	history   int
 	pages     int
-	failAfter int // >0 时已结算事件翻到该偏移量就报错（模拟中途失败）
+	failAfter int          // >0 时已结算事件翻到该偏移量就报错（模拟中途失败）
+	late      map[int]bool // 已过结束时间、但数据源还没标记关闭的事件
 }
 
 func (f *fakePM) Name() string { return "fake" }
 func (f *fakePM) event(i int) ds.PMEvent {
 	end := f.now.Truncate(15 * time.Minute).Add(-time.Duration(i) * 15 * time.Minute)
-	closed := end.Before(f.now) || end.Equal(f.now)
+	closed := (end.Before(f.now) || end.Equal(f.now)) && !f.late[i]
 	m := ds.PMMarket{ConditionID: fmt.Sprintf("c%d", i), Tokens: []string{fmt.Sprintf("up%d", i), fmt.Sprintf("dn%d", i)},
 		Outcomes: []string{"Up", "Down"}, Prices: []float64{0, 1}, Start: end.Add(-15 * time.Minute), End: end, Closed: closed, Winner: -1}
 	if closed {
@@ -33,6 +34,14 @@ func (f *fakePM) event(i int) ds.PMEvent {
 func (f *fakePM) Events(_ context.Context, q ds.PMEventQuery) ([]ds.PMEvent, error) {
 	f.pages++
 	var out []ds.PMEvent
+	if len(q.Slugs) > 0 {
+		for _, s := range q.Slugs {
+			var i int
+			fmt.Sscanf(s, "btc-updown-15m-%d", &i)
+			out = append(out, f.event(i))
+		}
+		return out, nil
+	}
 	if q.Closed != nil && !*q.Closed {
 		return []ds.PMEvent{f.event(-1), f.event(-2)}, nil
 	}
@@ -106,6 +115,35 @@ func TestPMSync(t *testing.T) {
 	}
 	if pts, _ := st.PMPrices(ctx, "up3", 0, 0); len(pts) < 2 {
 		t.Fatalf("watched prices %v", pts)
+	}
+}
+
+// 结束后晚一轮才标记关闭的事件：第二轮要更新为已结算并有赢家。
+func TestPMSyncLateClose(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 11, 26, 6, 20, 0, 0, time.UTC)
+	f := &fakePM{now: now, late: map[int]bool{1: true}}
+	p := NewPMSyncer(st, f, []string{"s"}, 1, time.Minute)
+	p.now = func() time.Time { return now }
+	if err := p.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := st.PMEventBySlug(ctx, "btc-updown-15m-1"); e.Closed {
+		t.Fatal("round 1 should store it as open")
+	}
+	f.late = nil
+	now = now.Add(5 * time.Minute) // 同一个 15 分钟内，没有新结算事件
+	if err := p.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e, err := st.PMEventBySlug(ctx, "btc-updown-15m-1")
+	if err != nil || !e.Closed || e.Markets[0].Winner != 1 {
+		t.Fatalf("round 2: %+v %v", e, err)
 	}
 }
 
