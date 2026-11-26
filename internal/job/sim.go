@@ -86,7 +86,10 @@ func LoadSim(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Marke
 	if err := st.UpdateSimOrders(ctx, changed, now); err != nil {
 		return nil, nil, err
 	}
-	v := &SimView{Account: acc, State: state, Orders: updated, Cutoff: cutoff}
+	if updated == nil {
+		updated = []sim.Order{} // JSON 输出 [] 而不是 null
+	}
+	v := &SimView{Account: acc, State: state, Orders: updated, Cutoff: cutoff, Bench: []float64{}}
 	for _, p := range state.Curve {
 		v.Bench = append(v.Bench, benchAt[p.Date])
 	}

@@ -136,15 +136,15 @@ export default function Quote() {
       grid: { left: 56, right: 56, top: 32, bottom: 48 },
       xAxis: { type: 'category', data: dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
       yAxis: [
-        { type: 'value', name: 'PE', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink }, nameTextStyle: { color: ink } },
-        { type: 'value', name: 'PB', scale: true, splitLine: { show: false }, axisLabel: { color: ink }, nameTextStyle: { color: ink } },
+        { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
+        { type: 'value', scale: true, splitLine: { show: false }, axisLabel: { color: ink } },
       ],
       dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 8, borderColor: line, textStyle: { color: ink } }],
       series: [
         // 亏损时 PE 为负，没有估值意义，画成空缺
-        { name: 'PE(TTM)', type: 'line', data: data.peTtm.slice(from).map((x) => (x !== null && x > 0 ? x : null)), showSymbol: false, connectNulls: false,
+        { name: 'PE(TTM)（左轴）', type: 'line', data: data.peTtm.slice(from).map((x) => (x !== null && x > 0 ? x : null)), showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.4, color: cssVar('--accent') }, itemStyle: { color: cssVar('--accent') } },
-        { name: 'PB', type: 'line', yAxisIndex: 1, data: data.pb.slice(from), showSymbol: false,
+        { name: 'PB（右轴）', type: 'line', yAxisIndex: 1, data: data.pb.slice(from), showSymbol: false,
           lineStyle: { width: 1.2, color: cssVar('--t-hot-1') }, itemStyle: { color: cssVar('--t-hot-1') } },
       ],
     }

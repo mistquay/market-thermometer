@@ -331,3 +331,5 @@ code, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; f
 .sim-note { width: 180px; }
 .sim-select { min-width: 180px; }
 .sim-proxy { grid-template-columns: auto 90px; }
+.btn { white-space: nowrap; }
+.sim-orders th { white-space: nowrap; }

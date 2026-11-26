@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError, type PortfolioData, type SecurityHit, type SimAccount, type SimOrder, type SimParams, type SimPlan, type SimView } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
-import { pct } from './temperature'
+import { pct, TIER_TEXT } from './temperature'
 
 const STATUS: Record<string, [string, string]> = {
   pending: ['待成交', 'tag-warn'],
@@ -212,7 +212,7 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
       </section>
       <OrderForm accountId={a.id} onPlaced={reload} onError={onError} />
       <RebalanceForm accountId={a.id} onPlaced={reload} />
-      <Orders orders={view.orders} name={name} accountId={a.id} onChanged={reload} onError={onError} />
+      <Orders orders={view.orders ?? []} name={name} accountId={a.id} onChanged={reload} onError={onError} />
     </>
   )
 }
@@ -331,7 +331,7 @@ function RebalanceForm({ accountId, onPlaced }: { accountId: number; onPlaced: (
       {error && <div className="error" style={{ margin: '0 16px 12px' }}>{error}</div>}
       {sp && (
         <p className="disclaimer" style={{ padding: '0 16px 8px' }}>
-          温度计分层仓位（{sp.date}）：估值档 {sp.tier || '—'} 底仓 {(sp.base * 100).toFixed(0)}%
+          温度计分层仓位（{sp.date}）：估值档 {TIER_TEXT[sp.tier] ?? '—'} 底仓 {(sp.base * 100).toFixed(0)}%
           {sp.overlay !== 0 && `，${sp.lastSignal} ${sp.overlay > 0 ? '+' : ''}${(sp.overlay * 100).toFixed(0)}%`} → 目标 {(sp.weight * 100).toFixed(0)}%。
           当前参数的回测没有跑赢估值档基线，这里只用于模拟检验。
         </p>
@@ -366,7 +366,7 @@ function RebalanceForm({ accountId, onPlaced }: { accountId: number; onPlaced: (
 }
 
 function Orders({ orders, name, accountId, onChanged, onError }: { orders: SimOrder[]; name: (c: string) => string; accountId: number; onChanged: () => void; onError: (s: string) => void }) {
-  const list = [...orders].reverse()
+  const list = [...(orders ?? [])].reverse()
   const cancel = async (o: SimOrder) => {
     try {
       await api.cancelSimOrder(accountId, o.id)
@@ -380,7 +380,7 @@ function Orders({ orders, name, accountId, onChanged, onError }: { orders: SimOr
       <div className="panel-head"><strong>委托</strong><span className="muted">{orders.length} 笔；委托只新增、不删除</span></div>
       {list.length === 0 ? <div className="empty">还没有委托。</div> : (
         <div className="scroll-y">
-          <table className="table static">
+          <table className="table static sim-orders">
             <thead><tr><th>#</th><th>提交</th><th>证券</th><th>方向</th><th className="num">数量</th><th>状态</th><th>成交</th><th className="num">成交价</th><th className="num">金额</th><th className="num">费用</th><th>来源 / 说明</th><th /></tr></thead>
             <tbody>
               {list.map((o) => {
