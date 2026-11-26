@@ -26,13 +26,20 @@ sources:
 # stockdb：本地 free-stockdb（需先启动 stockdb.exe），提供证券清单与除权乘数；
 # tencent：腾讯行情，备用源，不提供清单（沿用本地清单），ETF 分红无法识别。
 stocks:
-  sources: [stockdb, tencent]
-  # 场内基金（ETF/LOF）只用腾讯：stockdb 的基金历史不完整（如 510300 只有 2024 年起），
-  # 回退到它会把不完整的历史存进本地且以后补不上；腾讯不可用时这次跳过，下次从头拉。腾讯识别不了 ETF 分红。
-  fund_sources: [tencent]
+  # tdx：通达信行情协议，免注册、纯 Go，提供清单、日线、开高低与成交、除权除息（含 ETF 分红）；不含已退市股票。
+  #   单机与云服务器都能用，首次启动可自行回填。协议为逆向所得、数据无使用授权，服务器地址可能变化。
+  # stockdb：本机离线库（需先启动 stockdb.exe），含已退市股票与 PE / PB。没有时会自动跳过。
+  # tencent：腾讯行情，备用；大量请求会被 WAF 拦截。
+  sources: [tdx, stockdb, tencent]
+  # 场内基金（ETF/LOF）：stockdb 的基金历史不完整（如 510300 只有 2024 年起），不要放进来；
+  # 通达信从上市日起都有，并带 ETF 分红。
+  fund_sources: [tdx, tencent]
   skip_funds: false               # true：不同步场内基金日线（例如改由外部脚本导入）
   concurrency: 4
   options:
+    tdx:
+      connections: 4                  # 同时打开的连接数
+      # hosts: "1.2.3.4:7709,5.6.7.8:7709"   # 空为内置服务器列表
     stockdb:
       url: http://127.0.0.1:7899
     tencent:

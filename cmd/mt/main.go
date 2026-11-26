@@ -33,6 +33,7 @@ import (
 	_ "market-thermometer/internal/datasource/csindex"
 	_ "market-thermometer/internal/datasource/eastmoney"
 	_ "market-thermometer/internal/datasource/stockdb"
+	_ "market-thermometer/internal/datasource/tdx"
 	_ "market-thermometer/internal/datasource/tencent"
 	_ "market-thermometer/internal/derived/ma200"
 	"market-thermometer/internal/importer"
