@@ -180,6 +180,43 @@ func (e gammaEvent) convert() ds.PMEvent {
 }
 
 func (s *Source) Events(ctx context.Context, q ds.PMEventQuery) ([]ds.PMEvent, error) {
+	v := query(q)
+	v.Set("offset", strconv.Itoa(q.Offset))
+	var raw []gammaEvent
+	if err := s.get(ctx, s.gamma+"/events?"+v.Encode(), &raw); err != nil {
+		return nil, err
+	}
+	return convertAll(raw), nil
+}
+
+// EventsAfter 用 /events/keyset 按游标分页（/events 的 offset 超过约 2,000 会返回 422）。
+func (s *Source) EventsAfter(ctx context.Context, q ds.PMEventQuery, cursor string) ([]ds.PMEvent, string, error) {
+	v := query(q)
+	if cursor != "" {
+		v.Set("after_cursor", cursor)
+	}
+	var r struct {
+		Events     []gammaEvent `json:"events"`
+		NextCursor string       `json:"next_cursor"`
+	}
+	if err := s.get(ctx, s.gamma+"/events/keyset?"+v.Encode(), &r); err != nil {
+		return nil, "", err
+	}
+	if len(r.Events) == 0 {
+		r.NextCursor = ""
+	}
+	return convertAll(r.Events), r.NextCursor, nil
+}
+
+func convertAll(raw []gammaEvent) []ds.PMEvent {
+	out := make([]ds.PMEvent, 0, len(raw))
+	for _, e := range raw {
+		out = append(out, e.convert())
+	}
+	return out
+}
+
+func query(q ds.PMEventQuery) url.Values {
 	v := url.Values{}
 	if q.Slug != "" {
 		v.Set("slug", q.Slug)
@@ -205,16 +242,7 @@ func (s *Source) Events(ctx context.Context, q ds.PMEventQuery) ([]ds.PMEvent, e
 		limit = 100
 	}
 	v.Set("limit", strconv.Itoa(limit))
-	v.Set("offset", strconv.Itoa(q.Offset))
-	var raw []gammaEvent
-	if err := s.get(ctx, s.gamma+"/events?"+v.Encode(), &raw); err != nil {
-		return nil, err
-	}
-	out := make([]ds.PMEvent, 0, len(raw))
-	for _, e := range raw {
-		out = append(out, e.convert())
-	}
-	return out, nil
+	return v
 }
 
 func (s *Source) Search(ctx context.Context, text string, limit int) ([]ds.PMEvent, error) {

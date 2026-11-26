@@ -21,8 +21,18 @@ type Config struct {
 	Stocks        Stocks  `yaml:"stocks"`
 	Funds         Funds   `yaml:"funds"`
 	// Plugins 是外部进程插件。可执行文件与参数只能在这里配置（Web 不能新增或修改）。
-	Plugins []Plugin `yaml:"plugins"`
-	Crypto  Crypto   `yaml:"crypto"`
+	Plugins    []Plugin   `yaml:"plugins"`
+	Crypto     Crypto     `yaml:"crypto"`
+	Polymarket Polymarket `yaml:"polymarket"`
+}
+
+// Polymarket 是预测市场数据配置。Source 为空时不同步。
+type Polymarket struct {
+	Source      string   `yaml:"source"`       // 数据插件名，目前只有 polymarket
+	Series      []string `yaml:"series"`       // 同步的周期性系列，如 btc-up-or-down-15m
+	HistoryDays int      `yaml:"history_days"` // 系列已结算事件首次回溯天数，默认 30
+	EveryMin    int      `yaml:"every_min"`    // 同步间隔（分钟），默认 10
+	Proxy       bool     `yaml:"proxy"`        // 经 http_proxy 访问
 }
 
 // Crypto 是加密货币行情配置。Sources 按顺序回退；为空时不同步。

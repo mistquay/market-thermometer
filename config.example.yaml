@@ -63,6 +63,15 @@ funds:
 crypto:
   sources: [binance, okx]          # 按顺序回退
   symbols: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT]
-  history: {1d: 3000, 1h: 730, 15m: 180, 5m: 30}   # 周期 → 首次回填天数
+  history: {1d: 3000, 1h: 730, 15m: 180, 5m: 30, 1m: 14}   # 周期 → 首次回填天数（1m 供 5 分钟涨跌盘回测）
   every_min: 15                    # mt serve 内的同步间隔
+  proxy: false
+
+# Polymarket（只读行情）：周期性系列的已结算事件与 1 分钟价格历史（短期涨跌盘策略研究用），以及在预测市场页关注的事件。
+# 下单受地区限制，交易部分部署在海外服务器（见 docs/polymarket.md）；这里只读不受影响。
+polymarket:
+  source: polymarket
+  series: [btc-up-or-down-5m, btc-up-or-down-15m, btc-up-or-down-hourly, eth-up-or-down-5m, eth-up-or-down-15m, eth-up-or-down-hourly]
+  history_days: 14                 # 系列首次回溯天数（每轮最多补 600 个市场的价格历史，首次回填分多轮完成）
+  every_min: 10
   proxy: false

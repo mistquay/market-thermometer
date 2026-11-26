@@ -30,6 +30,7 @@ type Options struct {
 	// PluginOptions 是内置插件在 config.yaml 中的选项（插件 ID → 选项），管理页只读展示。
 	PluginOptions map[string]map[string]any
 	Crypto        *job.CryptoSyncer // 加密行情同步器；为 nil 时加密页显示未配置
+	PM            *job.PMSyncer     // Polymarket 同步器；为 nil 时预测市场页显示未配置
 }
 
 type Server struct {

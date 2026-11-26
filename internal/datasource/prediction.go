@@ -88,6 +88,8 @@ type Book struct {
 type PredictionSource interface {
 	Name() string
 	Events(ctx context.Context, q PMEventQuery) ([]PMEvent, error)
+	// EventsAfter 按游标分页（适合深翻页）：cursor 为空取第一页，返回下一页游标（为空表示没有更多）。忽略 q.Offset。
+	EventsAfter(ctx context.Context, q PMEventQuery, cursor string) ([]PMEvent, string, error)
 	Search(ctx context.Context, text string, limit int) ([]PMEvent, error)
 	// PriceHistory 返回代币在 [from, to]（Unix 秒）内的价格，fidelity 为采样间隔（分钟）。
 	PriceHistory(ctx context.Context, token string, from, to int64, fidelity int) ([]PricePoint, error)

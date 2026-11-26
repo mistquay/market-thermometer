@@ -72,6 +72,8 @@ func main() {
 		err = cmdImportBars(os.Args[2:])
 	case "ext-backfill":
 		err = cmdExtBackfill(os.Args[2:])
+	case "polymarket":
+		err = cmdPM(os.Args[2:])
 	case "crypto":
 		err = cmdCrypto(os.Args[2:])
 	case "gapfill":
@@ -89,7 +91,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|crypto|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|crypto|polymarket|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
 	os.Exit(2)
 }
 
@@ -99,6 +101,7 @@ type app struct {
 	hub    *ds.Hub
 	runner *job.Runner
 	crypto *job.CryptoSyncer
+	pm     *job.PMSyncer
 }
 
 func setup(fs *flag.FlagSet, args []string) (*app, error) {
@@ -192,18 +195,47 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		st.Close()
 		return nil, err
 	}
-	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto}, nil
+	pm, err := buildPM(cfg, st)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm}, nil
+}
+
+// outboundTransport 返回出站请求的 Transport：proxy=true 且配置了 http_proxy 时经代理，否则直连。
+func outboundTransport(cfg *config.Config, proxy bool) (*http.Transport, error) {
+	if !proxy || cfg.HTTPProxy == "" {
+		return &http.Transport{Proxy: nil}, nil
+	}
+	u, err := url.Parse(cfg.HTTPProxy)
+	if err != nil {
+		return nil, fmt.Errorf("http_proxy: %w", err)
+	}
+	return &http.Transport{Proxy: http.ProxyURL(u)}, nil
+}
+
+// buildPM 构造 Polymarket 数据源与同步器（未配置时返回 nil）。
+func buildPM(cfg *config.Config, st *store.Store) (*job.PMSyncer, error) {
+	if cfg.Polymarket.Source == "" {
+		return nil, nil
+	}
+	tr, err := outboundTransport(cfg, cfg.Polymarket.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	src, err := ds.BuildPrediction(cfg.Polymarket.Source, ds.Env{HTTP: &http.Client{Timeout: 30 * time.Second, Transport: tr}, Now: time.Now})
+	if err != nil {
+		return nil, err
+	}
+	return job.NewPMSyncer(st, src, cfg.Polymarket.Series, cfg.Polymarket.HistoryDays, time.Duration(cfg.Polymarket.EveryMin)*time.Minute), nil
 }
 
 // buildCrypto 构造加密货币 K 线数据源与同步器（未配置时返回不同步的空同步器）。
 func buildCrypto(cfg *config.Config, st *store.Store) (*job.CryptoSyncer, error) {
-	tr := &http.Transport{Proxy: nil}
-	if cfg.Crypto.Proxy && cfg.HTTPProxy != "" {
-		u, err := url.Parse(cfg.HTTPProxy)
-		if err != nil {
-			return nil, fmt.Errorf("http_proxy: %w", err)
-		}
-		tr = &http.Transport{Proxy: http.ProxyURL(u)}
+	tr, err := outboundTransport(cfg, cfg.Crypto.Proxy)
+	if err != nil {
+		return nil, err
 	}
 	var srcs []ds.KlineSource
 	for _, name := range cfg.Crypto.Sources {
@@ -250,6 +282,7 @@ func cmdServe(args []string) error {
 			PluginOptions: builtinOptions(a.cfg),
 			Pusher:        pusher,
 			Crypto:        a.crypto,
+			PM:            a.pm,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -267,6 +300,10 @@ func cmdServe(args []string) error {
 		if a.crypto.Configured() {
 			go a.crypto.Run(ctx)
 			log.Printf("加密行情同步已启用：%v", a.crypto.Symbols())
+		}
+		if a.pm.Configured() {
+			go a.pm.Run(ctx)
+			log.Printf("Polymarket 同步已启用：%v", a.pm.Series())
 		}
 	}
 	log.Printf("listening on http://%s  数据源: %v", a.cfg.Listen, a.hub.Sources())
@@ -446,6 +483,24 @@ func cmdExtBackfill(args []string) error {
 		return fmt.Errorf("结束状态：%s", st.State)
 	}
 	return nil
+}
+
+func cmdPM(args []string) error {
+	a, err := setup(flag.NewFlagSet("polymarket", flag.ExitOnError), args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	if !a.pm.Configured() {
+		return errors.New("config.yaml 未配置 polymarket.source")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	err = a.pm.SyncOnce(ctx)
+	for _, line := range a.pm.Status().Log {
+		fmt.Println(line)
+	}
+	return err
 }
 
 func cmdCrypto(args []string) error {
