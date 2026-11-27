@@ -7,6 +7,7 @@ import { AccountPage, OrderTicket, ShadowPanel, SimPanel } from './PMSim'
 import { EvalPanel } from './PMEval'
 import { ArbAndQueuePanel } from './PMArbQueue'
 import { NotesBox } from './NotesBox'
+import { useToast } from './ui/Feedback'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 function when(iso: string | number) {
@@ -175,7 +176,7 @@ function Home() {
           <div ref={searchRef} className="relative w-64 sm:w-80">
             <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ink-3)]" />
             <input
-              placeholder="搜 Polymarket 事件（如 bitcoin、fed）回车…"
+              placeholder="搜事件（如 bitcoin、fed）回车…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => {
@@ -261,7 +262,7 @@ function Home() {
             <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
               {book?.configured
                 ? `每 ${book.status.every} · ${book.status.targets.length} 目标 · ${book.stats.spots.toLocaleString()} 现货${
-                    book.status.wsEnabled ? ` · WS ${book.status.wsSpotOk && book.status.wsBookOk ? '已连' : '回退REST'}` : ''
+                    book.status.wsEnabled ? (book.status.wsSpotOk && book.status.wsBookOk ? ' · WS在线' : ' · REST回退') : ''
                   }`
                 : '配置 polymarket.book 启用'}
             </div>
@@ -301,7 +302,7 @@ function Home() {
             <div className="mt-1.5 flex items-baseline gap-2">
               <span className="text-xl font-bold tracking-tight mono">${simEquity.toFixed(2)}</span>
               {simSummary && simSummary.accounts.length > 0 && (
-                <span className={`text-xs font-medium mono ${simPnl >= 0 ? 'up' : 'down'}`}>
+                <span className={`text-xs font-medium mono ${simPnl >= 0 ? 'us-up' : 'us-down'}`}>
                   {simPnl >= 0 ? '+' : '−'}${Math.abs(simPnl).toFixed(2)}
                 </span>
               )}
@@ -425,21 +426,13 @@ function Home() {
             </section>
           )}
 
-          {/* 系列快速选择条 + 统计表 */}
+          {/* 涨跌盘系列统计表（点击任意行切换下方进行中/已结算事件列表） */}
           <section className="panel overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-sm font-semibold">涨跌盘系列</strong>
-                <div className="seg">
-                  {state.stats.map((s) => (
-                    <button key={s.series} className={s.series === series ? 'on' : ''} onClick={() => setSeries(s.series)}>
-                      {s.series.replace('-up-or-down-', ' ').toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div className="panel-head border-b border-[var(--line)]">
+              <strong className="text-sm font-semibold">涨跌盘系列</strong>
+              <span className="text-xs text-[var(--ink-2)]">点击任意系列行筛选下方事件列表</span>
               {state.status.lastRun && (
-                <span className="mono text-xs text-[var(--ink-3)]">
+                <span className="mono ml-auto text-xs text-[var(--ink-3)]">
                   上次同步 {new Date(state.status.lastRun).toLocaleString('zh-CN')}
                 </span>
               )}
@@ -449,23 +442,25 @@ function Home() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>系列</th>
-                    <th className="num">事件</th>
-                    <th className="num">已结算</th>
-                    <th className="num">Up 胜率</th>
-                    <th className="num">含价格历史</th>
-                    <th>已结算覆盖</th>
+                    <th className="nowrap">系列</th>
+                    <th className="num nowrap">事件</th>
+                    <th className="num nowrap">已结算</th>
+                    <th className="num nowrap">Up 胜率</th>
+                    <th className="num nowrap">含价格历史</th>
+                    <th className="nowrap">已结算覆盖</th>
                   </tr>
                 </thead>
                 <tbody>
                   {state.stats.map((s) => (
                     <tr key={s.series} className={s.series === series ? 'selected' : ''} onClick={() => setSeries(s.series)}>
-                      <td className="mono font-medium text-[var(--accent)]">{s.series}</td>
-                      <td className="num mono">{s.events.toLocaleString()}</td>
-                      <td className="num mono">{s.closed.toLocaleString()}</td>
-                      <td className="num mono">{s.resolved ? `${((s.firstWins / s.resolved) * 100).toFixed(1)}%` : '—'}</td>
-                      <td className="num mono">{s.withHistory.toLocaleString()}</td>
-                      <td className="mono small text-[var(--ink-2)]">
+                      <td className="mono nowrap font-medium text-[var(--accent)]">
+                        {s.series.replace('-up-or-down-', ' · ').toUpperCase()}
+                      </td>
+                      <td className="num mono nowrap">{s.events.toLocaleString()}</td>
+                      <td className="num mono nowrap">{s.closed.toLocaleString()}</td>
+                      <td className="num mono nowrap">{s.resolved ? `${((s.firstWins / s.resolved) * 100).toFixed(1)}%` : '—'}</td>
+                      <td className="num mono nowrap">{s.withHistory.toLocaleString()}</td>
+                      <td className="mono small nowrap text-[var(--ink-2)]">
                         {when(s.first)} ~ {when(s.last)}
                       </td>
                     </tr>
@@ -486,7 +481,7 @@ function Home() {
                 <div className="panel-head border-b border-[var(--line)]">
                   <strong>进行中 / 即将开始</strong>
                   <span className="tag tag-ok">{upcoming.length}</span>
-                  <span className="mono ml-auto text-xs text-[var(--ink-3)]">{series}</span>
+                  <span className="tag tag-muted mono ml-auto">{series.replace('-up-or-down-', ' ').toUpperCase()}</span>
                 </div>
                 <table className="table">
                   <thead>
@@ -514,7 +509,8 @@ function Home() {
               <section className="panel overflow-hidden">
                 <div className="panel-head border-b border-[var(--line)]">
                   <strong>最近结算</strong>
-                  <span className="tag tag-muted mono">{series}</span>
+                  <span className="tag tag-muted">{recent.length}</span>
+                  <span className="tag tag-muted mono ml-auto">{series.replace('-up-or-down-', ' ').toUpperCase()}</span>
                 </div>
                 <div className="scroll-y">
                   <table className="table">
@@ -564,8 +560,10 @@ function EventDetail({ slug }: { slug: string }) {
   const [snaps, setSnaps] = useState<BookSnap[]>([])
   const [evSignals, setEvSignals] = useState<PMSignal[]>([])
   const [evOrders, setEvOrders] = useState<{ id: number; accountName: string; time: string; outcome: number; outcomeName: string; side: string; shares: number; gross: number; avgPrice: number }[]>([])
+  const [presetLimit, setPresetLimit] = useState<{ cents: string; side?: 'buy' | 'sell'; seq: number } | null>(null)
   const [error, setError] = useState('')
   const { theme } = useTheme()
+  const toast = useToast()
 
   useEffect(() => {
     setEv(null)
@@ -660,8 +658,8 @@ function EventDetail({ slug }: { slug: string }) {
         ? []
         : (
             [
-              ['买一', true, '#ef4444'],
-              ['卖一', false, '#10b981'],
+              ['买一', true, cssVar('--us-up') || '#10b981'],
+              ['卖一', false, cssVar('--us-down') || '#ef4444'],
             ] as const
           ).map(([name, bid, color]) => ({
             name,
@@ -721,10 +719,11 @@ function EventDetail({ slug }: { slug: string }) {
       },
       yAxis: {
         type: 'value',
-        min: (v: { min: number }) => Math.max(0, Math.floor((v.min - 0.02) * 50) / 50),
-        max: (v: { max: number }) => Math.min(1, Math.ceil((v.max + 0.02) * 50) / 50),
+        min: (v: { min: number }) => Math.max(0, Math.floor((v.min - 0.03) * 20) / 20),
+        max: (v: { max: number }) => Math.min(1, Math.ceil((v.max + 0.03) * 20) / 20),
+        splitNumber: 5,
         splitLine: { lineStyle: { color: line, type: 'dashed' } },
-        axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${(v * 100).toFixed(0)}¢` },
+        axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${Math.round(v * 100)}¢` },
       },
       dataZoom: [
         { type: 'inside' },
@@ -777,6 +776,98 @@ function EventDetail({ slug }: { slug: string }) {
   const maxBookSize = book
     ? Math.max(1, ...book.bids.slice(0, 12).map((x) => x.size), ...book.asks.slice(0, 12).map((x) => x.size))
     : 1
+
+  // 实时盘口累计深度图（买盘绿色累计阶梯 vs 卖盘红色累计阶梯）
+  const depthOption = useMemo<EChartsOption | null>(() => {
+    if (!book || (book.bids.length === 0 && book.asks.length === 0)) return null
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const bidColor = cssVar('--us-up') || '#10b981'
+    const askColor = cssVar('--us-down') || '#ef4444'
+
+    // bids 按价格降序，累计后反转为升序方便在左半边递增→向中间汇合
+    const bidsSorted = [...book.bids].slice(0, 15).sort((a, b) => b.price - a.price)
+    let cumB = 0
+    const bidPts = bidsSorted
+      .map((l) => {
+        cumB += l.size
+        return [+(l.price * 100).toFixed(1), Math.round(cumB)] as [number, number]
+      })
+      .reverse()
+
+    const asksSorted = [...book.asks].slice(0, 15).sort((a, b) => a.price - b.price)
+    let cumA = 0
+    const askPts = asksSorted.map((l) => {
+      cumA += l.size
+      return [+(l.price * 100).toFixed(1), Math.round(cumA)] as [number, number]
+    })
+
+    const allPrices = [...bidPts.map((p) => p[0]), ...askPts.map((p) => p[0])]
+    if (allPrices.length === 0) return null
+    const xMin = Math.max(0, Math.floor(Math.min(...allPrices) - 1))
+    const xMax = Math.min(100, Math.ceil(Math.max(...allPrices) + 1))
+
+    return {
+      animation: false,
+      grid: { left: 46, right: 14, top: 14, bottom: 26 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 11.5 },
+        formatter: (params: unknown) => {
+          const arr = Array.isArray(params) ? params : [params]
+          const p = arr[0] as { seriesName: string; value: [number, number] } | undefined
+          if (!p) return ''
+          return `${p.seriesName}<br/>价格 <b>${p.value[0]}¢</b> · 累计深度 <b>${p.value[1].toLocaleString()}</b> 份`
+        },
+      },
+      xAxis: {
+        type: 'value',
+        min: xMin,
+        max: xMax,
+        axisLine: { lineStyle: { color: line } },
+        splitLine: { show: false },
+        axisLabel: { color: ink, fontSize: 10.5, formatter: (v: number) => `${v}¢` },
+      },
+      yAxis: {
+        type: 'value',
+        splitNumber: 3,
+        splitLine: { lineStyle: { color: line, type: 'dashed' } },
+        axisLabel: { color: ink, fontSize: 10.5, formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${v}`) },
+      },
+      series: [
+        {
+          name: '买盘累计 (Bid)',
+          type: 'line',
+          step: 'start',
+          showSymbol: false,
+          data: bidPts,
+          lineStyle: { width: 1.8, color: bidColor },
+          itemStyle: { color: bidColor },
+          areaStyle: { color: bidColor, opacity: 0.16 },
+        },
+        {
+          name: '卖盘累计 (Ask)',
+          type: 'line',
+          step: 'end',
+          showSymbol: false,
+          data: askPts,
+          lineStyle: { width: 1.8, color: askColor },
+          itemStyle: { color: askColor },
+          areaStyle: { color: askColor, opacity: 0.16 },
+        },
+      ],
+    }
+  }, [book, theme])
+
+  const pickLevel = (price: number, side: 'buy' | 'sell') => {
+    const c = (price * 100).toFixed(1)
+    setPresetLimit({ cents: c, side, seq: Date.now() })
+    toast.info(`已填入${side === 'buy' ? '买入' : '卖出'}限价 ${c}¢`)
+  }
 
   return (
     <div className="page">
@@ -918,12 +1009,15 @@ function EventDetail({ slug }: { slug: string }) {
               {evOrders.length > 0 && <> · 模拟成交 {evOrders.length} 笔（图上 ◆）</>}
               {m.winner >= 0 && <> · 结果 <strong className="text-[var(--ink)]">{m.outcomes[m.winner]}</strong></>}
             </p>
-            {ev && <OrderTicket slug={ev.slug} m={m} outcome={oi} />}
+            {ev && <OrderTicket slug={ev.slug} m={m} outcome={oi} presetLimit={presetLimit} />}
           </section>
 
           <section className="panel overflow-hidden">
             <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3.5">
-              <strong className="text-sm font-semibold">实时订单簿 · {m.outcomes[oi]}</strong>
+              <div>
+                <strong className="text-sm font-semibold">实时订单簿 · {m.outcomes[oi]}</strong>
+                <div className="text-[11px] text-[var(--ink-3)]">点击任意档位一键填入限价（绿买 / 红卖）</div>
+              </div>
               {bestBid !== undefined && bestAsk !== undefined && (
                 <span className="tag tag-muted mono">价差 {cents(bestAsk - bestBid)}</span>
               )}
@@ -933,40 +1027,55 @@ function EventDetail({ slug }: { slug: string }) {
             ) : !book ? (
               <div className="empty">加载盘口中…</div>
             ) : (
-              <div className="divide-y divide-[var(--line)] text-xs mono">
-                <div className="grid grid-cols-4 bg-[var(--bg-subtle)] px-4 py-2 text-[11px] font-medium text-[var(--ink-3)]">
-                  <span className="text-right">买价</span>
-                  <span className="text-right">买量</span>
-                  <span className="text-right">卖价</span>
-                  <span className="text-right">卖量</span>
+              <>
+                {depthOption && (
+                  <div className="border-b border-[var(--line)] bg-[var(--bg-subtle)]/40 px-2 pt-2 pb-1">
+                    <EChart option={depthOption} height={155} />
+                  </div>
+                )}
+                <div className="divide-y divide-[var(--line)] text-xs mono">
+                  <div className="grid grid-cols-4 bg-[var(--bg-subtle)] px-4 py-2 text-[11px] font-medium text-[var(--ink-3)]">
+                    <span className="text-right">买价 (Bid)</span>
+                    <span className="text-right">买量</span>
+                    <span className="text-right">卖价 (Ask)</span>
+                    <span className="text-right">卖量</span>
+                  </div>
+                  {Array.from({ length: bookRows }, (_, i) => {
+                    const bid = book.bids[i]
+                    const ask = book.asks[i]
+                    const bidW = bid ? Math.min(100, (bid.size / maxBookSize) * 100) : 0
+                    const askW = ask ? Math.min(100, (ask.size / maxBookSize) * 100) : 0
+                    return (
+                      <div key={i} className="grid grid-cols-2">
+                        <div
+                          onClick={() => bid && pickLevel(bid.price, 'sell')}
+                          title={bid ? `点击填入卖出限价 ${cents(bid.price)}` : undefined}
+                          className={`relative grid grid-cols-2 px-4 py-1.5 ${bid ? 'cursor-pointer hover:bg-[var(--panel-2)]' : ''}`}
+                        >
+                          <div
+                            className="pointer-events-none absolute inset-y-0 right-0 bg-[#10b981]/14"
+                            style={{ width: `${bidW}%` }}
+                          />
+                          <span className="relative text-right font-medium us-up">{bid ? cents(bid.price) : ''}</span>
+                          <span className="relative text-right text-[var(--ink-2)]">{bid ? bid.size.toFixed(0) : ''}</span>
+                        </div>
+                        <div
+                          onClick={() => ask && pickLevel(ask.price, 'buy')}
+                          title={ask ? `点击填入买入限价 ${cents(ask.price)}` : undefined}
+                          className={`relative grid grid-cols-2 border-l border-[var(--line)] px-4 py-1.5 ${ask ? 'cursor-pointer hover:bg-[var(--panel-2)]' : ''}`}
+                        >
+                          <div
+                            className="pointer-events-none absolute inset-y-0 left-0 bg-[#ef4444]/14"
+                            style={{ width: `${askW}%` }}
+                          />
+                          <span className="relative text-right font-medium us-down">{ask ? cents(ask.price) : ''}</span>
+                          <span className="relative text-right text-[var(--ink-2)]">{ask ? ask.size.toFixed(0) : ''}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-                {Array.from({ length: bookRows }, (_, i) => {
-                  const bid = book.bids[i]
-                  const ask = book.asks[i]
-                  const bidW = bid ? Math.min(100, (bid.size / maxBookSize) * 100) : 0
-                  const askW = ask ? Math.min(100, (ask.size / maxBookSize) * 100) : 0
-                  return (
-                    <div key={i} className="grid grid-cols-2">
-                      <div className="relative grid grid-cols-2 px-4 py-1.5">
-                        <div
-                          className="pointer-events-none absolute inset-y-0 right-0 bg-[#ef4444]/12"
-                          style={{ width: `${bidW}%` }}
-                        />
-                        <span className="relative text-right font-medium up">{bid ? cents(bid.price) : ''}</span>
-                        <span className="relative text-right text-[var(--ink-2)]">{bid ? bid.size.toFixed(0) : ''}</span>
-                      </div>
-                      <div className="relative grid grid-cols-2 border-l border-[var(--line)] px-4 py-1.5">
-                        <div
-                          className="pointer-events-none absolute inset-y-0 left-0 bg-[#10b981]/12"
-                          style={{ width: `${askW}%` }}
-                        />
-                        <span className="relative text-right font-medium down">{ask ? cents(ask.price) : ''}</span>
-                        <span className="relative text-right text-[var(--ink-2)]">{ask ? ask.size.toFixed(0) : ''}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+              </>
             )}
           </section>
         </div>

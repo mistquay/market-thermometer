@@ -261,7 +261,7 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
                     </td>
                     <td className="num mono small">{(p.p * 100).toFixed(1)}%</td>
                     <td className="num mono small">{(p.ask * 100).toFixed(1)}¢</td>
-                    <td className="num mono small up">+{(p.edge * 100).toFixed(1)}¢</td>
+                    <td className="num mono small us-up">+{(p.edge * 100).toFixed(1)}¢</td>
                     <td className="num mono small">${p.suggestedUsd.toFixed(0)}</td>
                     <td>
                       <span className={`tag ${st.cls}`}>{st.text}</span>
@@ -355,11 +355,11 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
                       <td className="num mono">{o.shares.toFixed(1)}</td>
                       <td className="num mono">{(o.rawSumAsk * 100).toFixed(2)}¢</td>
                       <td className="num mono">${o.totalCost.toFixed(2)}</td>
-                      <td className={`num mono font-semibold ${o.netPerUnit > 0 ? 'up' : 'down'}`}>
+                      <td className={`num mono font-semibold ${o.netPerUnit > 0 ? 'us-up' : 'us-down'}`}>
                         {o.netPerUnit >= 0 ? '+' : ''}
                         {(o.netPerUnit * 100).toFixed(2)}¢
                       </td>
-                      <td className={`num mono ${o.netProfit > 0 ? 'up' : 'down'}`}>
+                      <td className={`num mono ${o.netProfit > 0 ? 'us-up' : 'us-down'}`}>
                         {o.netProfit >= 0 ? '+' : '−'}${Math.abs(o.netProfit).toFixed(2)} ({(o.roi * 100).toFixed(2)}%)
                       </td>
                     </tr>
@@ -404,8 +404,8 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
                             </a>
                           </td>
                           <td className="num mono small">{(h.rawSumAsk * 100).toFixed(2)}¢</td>
-                          <td className="num mono small up">+{(h.netPerUnit * 100).toFixed(2)}¢</td>
-                          <td className="num mono small up">+${h.netProfit.toFixed(2)}</td>
+                          <td className="num mono small us-up">+{(h.netPerUnit * 100).toFixed(2)}¢</td>
+                          <td className="num mono small us-up">+${h.netProfit.toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -508,7 +508,7 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
                     )}
                   </td>
                   <td>
-                    <span className={`tag ${tr.side === 'BUY' ? 'tag-hot' : 'tag-cold'}`}>{tr.side}</span>
+                    <span className={`tag ${tr.side === 'BUY' ? 'tag-ok' : 'tag-bad'}`}>{tr.side}</span>
                   </td>
                   <td className="max-w-[320px] truncate">
                     {tr.eventSlug ? (

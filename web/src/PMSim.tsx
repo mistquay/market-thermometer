@@ -1,16 +1,55 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Plus, Radio, ShieldAlert, Trash2 } from 'lucide-react'
 import { api, type PMAccountView, type PMMarket, type PMOrder, type PMShadowStatus, type PMSignal, type PMSimParams } from './api'
+import EChart, { cssVar, type EChartsOption } from './EChart'
+import { useTheme } from './theme'
 import { useConfirm, useToast } from './ui/Feedback'
 
 const money = (x: number) => `${x < 0 ? '−' : ''}$${Math.abs(x).toFixed(2)}`
 const cents = (p: number) => `${(p * 100).toFixed(1)}¢`
 const signed = (x: number) => (
-  <span className={x > 0 ? 'up' : x < 0 ? 'down' : ''}>
+  <span className={x > 0 ? 'us-up' : x < 0 ? 'us-down' : ''}>
     {x > 0 ? '+' : ''}
     {money(x)}
   </span>
 )
+
+/** 标准正态分布 CDF Φ(z)（Abramowitz & Stegun 7.1.26，误差 < 1.5e-7）。 */
+function normalCDF(z: number) {
+  const sign = z < 0 ? -1 : 1
+  const x = Math.abs(z) / Math.SQRT2
+  const t = 1 / (1 + 0.3275911 * x)
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) * Math.exp(-x * x)
+  return 0.5 * (1 + sign * y)
+}
+
+/** 单位方差标准化 Student-t CDF：t = z * sqrt(df / (df - 2))，用复合 Simpson 积分精确绘制曲线。 */
+function studentTUnitCDF(z: number, df: number) {
+  if (!(df > 2)) return normalCDF(z)
+  const x = Math.abs(z) * Math.sqrt(df / (df - 2))
+  if (x === 0) return 0.5
+  // 积分 ∫_0^x (1 + u^2 / df)^(-(df+1)/2) du，再用 lnGamma 计算归一化常数
+  const logGamma = (v: number): number => {
+    const g = 7
+    const c = [
+      0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313,
+      -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+    ]
+    let a = c[0]
+    for (let i = 1; i < g + 2; i++) a += c[i] / (v - 1 + i)
+    const t = v - 1 + g + 0.5
+    return 0.5 * Math.log(2 * Math.PI) + (v - 0.5) * Math.log(t) - t + Math.log(a)
+  }
+  const coef = Math.exp(logGamma((df + 1) / 2) - logGamma(df / 2)) / Math.sqrt(df * Math.PI)
+  const steps = 40
+  const h = x / steps
+  const f = (u: number) => Math.pow(1 + (u * u) / df, -(df + 1) / 2)
+  let sum = f(0) + f(x)
+  for (let i = 1; i < steps; i++) sum += (i % 2 === 0 ? 2 : 4) * f(i * h)
+  const area = coef * (h / 3) * sum
+  const p = Math.min(1, Math.max(0, 0.5 + (z >= 0 ? area : -area)))
+  return p
+}
 const pad = (n: number) => String(n).padStart(2, '0')
 function hms(iso: string) {
   const d = new Date(iso)
@@ -397,7 +436,7 @@ export function AccountPage({ id }: { id: number }) {
                       {o.question}
                     </a>
                   </td>
-                  <td className={o.side === 'buy' ? 'up font-medium' : 'down font-medium'}>
+                  <td className={o.side === 'buy' ? 'us-up font-medium' : 'us-down font-medium'}>
                     {o.side === 'buy' ? '买' : '卖'} {o.outcomeName}
                   </td>
                   <td className="num mono small">
@@ -428,8 +467,18 @@ export function AccountPage({ id }: { id: number }) {
   )
 }
 
-/** 事件详情页的下单面板：先试算（按实时盘口），确认后下单。 */
-export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; outcome: number }) {
+/** 事件详情页的下单面板：先试算（按实时盘口），确认后下单；支持点击订单簿档位自动填入限价。 */
+export function OrderTicket({
+  slug,
+  m,
+  outcome,
+  presetLimit,
+}: {
+  slug: string
+  m: PMMarket
+  outcome: number
+  presetLimit?: { cents: string; side?: 'buy' | 'sell'; seq: number } | null
+}) {
   const [accts, setAccts] = useState<PMAccountView[]>([])
   const [acct, setAcct] = useState(0)
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
@@ -439,6 +488,15 @@ export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; o
   const [preview, setPreview] = useState<PMOrder | null>(null)
   const [result, setResult] = useState<PMOrder | null>(null)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!presetLimit) return
+    setLimit(presetLimit.cents)
+    if (presetLimit.side) {
+      setSide(presetLimit.side)
+      if (presetLimit.side === 'sell') setMode('shares')
+    }
+  }, [presetLimit])
 
   useEffect(() => {
     api.pmSim().then(
@@ -559,17 +617,20 @@ export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; o
           placeholder="限价 ¢"
           title={side === 'buy' ? '最高买价（美分），空为不限' : '最低卖价（美分），空为不限'}
         />
-        <button className="btn" onClick={() => req(true)}>
-          试算
-        </button>
-        <button
-          className="btn btn-primary"
-          disabled={!preview || preview.status === 'rejected'}
-          onClick={() => req(false)}
-          title="先试算再下单；没填限价时以试算的最差成交价为限价"
-        >
-          确认下单
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn" onClick={() => req(true)}>
+            试算
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={!preview || preview.status === 'rejected'}
+            onClick={() => req(false)}
+            title="先试算再下单；没填限价时以试算的最差成交价为限价"
+          >
+            确认下单
+          </button>
+          {!preview && <span className="text-[11px] text-[var(--ink-3)]">先点试算后解锁下单</span>}
+        </div>
       </div>
       {error && <p className="bad-text small mt-2 mb-0">{error}</p>}
       {preview && show(preview, '试算（实时盘口）')}
@@ -578,9 +639,10 @@ export function OrderTicket({ slug, m, outcome }: { slug: string; m: PMMarket; o
   )
 }
 
-/** 策略影子模式面板：进行中市场的实时估值与最近信号（只记录、不下单）。 */
+/** 策略影子模式面板：进行中市场的实时估值、正态 vs Student-t 白盒分布对比图与最近信号。 */
 export function ShadowPanel({ s }: { s: PMShadowStatus }) {
   const [sigs, setSigs] = useState<PMSignal[]>([])
+  const { theme } = useTheme()
   useEffect(() => {
     api.pmSignals(Date.now() - 24 * 3600_000).then(setSigs, () => setSigs([]))
   }, [s.signals])
@@ -588,8 +650,111 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
   const settled = sigs.filter((x) => x.winner >= 0)
   const pnl = (x: PMSignal) => (x.winner === x.outcome ? 1 : 0) - x.ask - x.feeRate * x.ask * (1 - x.ask)
   const edge = (x: number) => (
-    <span className={x >= s.minEdge ? 'warn-text' : x > 0 ? 'text-[var(--ink)]' : 'muted'}>{(x * 100).toFixed(1)}¢</span>
+    <span className={x >= s.minEdge ? 'us-up font-semibold' : x > 0 ? 'text-[var(--ink)]' : 'muted'}>
+      {x > 0 ? '+' : ''}
+      {(x * 100).toFixed(1)}¢
+    </span>
   )
+
+  // 白盒分布对比图：标准正态 Φ(z) vs Student-t(df) + 实时市场点 (z, P) & (z, Ask)
+  const distOption = useMemo<EChartsOption>(() => {
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const accent = cssVar('--accent')
+    const warn = cssVar('--warn')
+    const ok = cssVar('--us-up') || cssVar('--ok')
+    const df = s.df && s.df > 2 ? s.df : 6
+    const zs: number[] = []
+    for (let i = -30; i <= 30; i++) zs.push(+(i * 0.1).toFixed(1))
+    const normPts = zs.map((z) => [z, +(normalCDF(z) * 100).toFixed(2)])
+    const tPts = zs.map((z) => [z, +(studentTUnitCDF(z, df) * 100).toFixed(2)])
+
+    const live = (s.evals ?? []).filter((e) => e.ok && e.z !== undefined)
+    const modelDots = live.map((e) => ({
+      name: `${e.target.series.replace('-up-or-down-', ' ').toUpperCase()} 模型P`,
+      value: [Math.max(-3, Math.min(3, +(e.z ?? 0).toFixed(2))), +(e.p * 100).toFixed(1)],
+    }))
+    const askDots = live
+      .filter((e) => e.askUp > 0)
+      .map((e) => ({
+        name: `${e.target.series.replace('-up-or-down-', ' ').toUpperCase()} Up卖一`,
+        value: [Math.max(-3, Math.min(3, +(e.z ?? 0).toFixed(2))), +(e.askUp * 100).toFixed(1)],
+      }))
+
+    return {
+      animation: false,
+      grid: { left: 48, right: 20, top: 34, bottom: 38 },
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        formatter: (p: unknown) => {
+          const d = p as { seriesName: string; name?: string; value: [number, number] }
+          return `${d.name || d.seriesName}<br/>z = <b>${d.value[0]}</b> · 概率/价格 = <b>${d.value[1]}%</b>`
+        },
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 11.5 }, itemWidth: 14, itemHeight: 4 },
+      xAxis: {
+        type: 'value',
+        name: '标准化偏离 z',
+        nameLocation: 'middle',
+        nameGap: 22,
+        nameTextStyle: { color: ink, fontSize: 11 },
+        min: -3,
+        max: 3,
+        splitLine: { lineStyle: { color: line, type: 'dashed' } },
+        axisLabel: { color: ink, fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        interval: 25,
+        splitLine: { lineStyle: { color: line, type: 'dashed' } },
+        axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` },
+      },
+      series: [
+        {
+          name: '标准正态 Φ(z)',
+          type: 'line',
+          showSymbol: false,
+          data: normPts,
+          lineStyle: { width: 1.5, color: ink, type: 'dashed' },
+          itemStyle: { color: ink },
+        },
+        {
+          name: `Student-t (df=${df}) 厚尾${s.df && s.df > 2 ? ' · 生效中' : ' · 参考'}`,
+          type: 'line',
+          showSymbol: false,
+          data: tPts,
+          lineStyle: { width: 2.2, color: accent },
+          itemStyle: { color: accent },
+        },
+        ...(modelDots.length > 0
+          ? [
+              {
+                name: '实时市场 模型 P(Up)',
+                type: 'scatter' as const,
+                symbolSize: 10,
+                data: modelDots,
+                itemStyle: { color: ok },
+              },
+              {
+                name: '实时市场 Up 卖一',
+                type: 'scatter' as const,
+                symbol: 'diamond',
+                symbolSize: 10,
+                data: askDots,
+                itemStyle: { color: warn },
+              },
+            ]
+          : []),
+      ],
+    }
+  }, [s.df, s.evals, theme])
 
   return (
     <section className="panel overflow-hidden">
@@ -651,6 +816,17 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 正态 vs Student-t 白盒分布对比图 */}
+      <div className="border-b border-[var(--line)] px-4 pt-3 pb-2">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2 px-1 text-[11.5px] text-[var(--ink-2)]">
+          <span>
+            <strong className="text-[var(--ink)]">白盒分布可视化</strong>：对比标准正态与 Student-t(df={s.df && s.df > 2 ? s.df : 6}) 在 |z|∈[1,3] 区间对极端过自信的平滑压缩
+          </span>
+          <span className="mono text-[var(--ink-3)]">绿圆=模型 P(Up) · 橙菱=市场卖一（垂直差 ≈ 扣费前 Edge）</span>
+        </div>
+        <EChart option={distOption} height={225} />
       </div>
 
       <div className="table-scroll">
@@ -749,7 +925,7 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
             <tr>
               <th>时间</th>
               <th>市场</th>
-              <th>结果</th>
+              <th>预测方向</th>
               <th className="num">剩余</th>
               <th className="num">模型概率</th>
               <th className="num">卖一（量）</th>

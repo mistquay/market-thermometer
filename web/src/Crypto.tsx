@@ -184,8 +184,8 @@ export default function Crypto() {
                     <span
                       className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold mono ${
                         chg >= 0
-                          ? 'bg-[color-mix(in_srgb,#ef4444_14%,transparent)] text-[#ef4444]'
-                          : 'bg-[color-mix(in_srgb,#10b981_14%,transparent)] text-[#10b981]'
+                          ? 'bg-[color-mix(in_srgb,var(--us-up)_14%,transparent)] us-up'
+                          : 'bg-[color-mix(in_srgb,var(--us-down)_14%,transparent)] us-down'
                       }`}
                     >
                       {chg >= 0 ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}

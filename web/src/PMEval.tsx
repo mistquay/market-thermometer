@@ -28,7 +28,7 @@ const DEFAULT_CFG: PMEvalConfig = {
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`
 const money = (x: number) => `${x < 0 ? '−' : ''}$${Math.abs(x).toFixed(2)}`
 const signedMoney = (x: number) => (
-  <span className={x > 0 ? 'up' : x < 0 ? 'down' : ''}>
+  <span className={x > 0 ? 'us-up' : x < 0 ? 'us-down' : ''}>
     {x > 0 ? '+' : ''}
     {money(x)}
   </span>
@@ -47,6 +47,7 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
   const [cfg, setCfg] = useState<PMEvalConfig>(DEFAULT_CFG)
   const [rep, setRep] = useState<PMEvalReport | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [attrDim, setAttrDim] = useState<'edge' | 'ask' | 'tau' | 'series'>('edge')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const { theme } = useTheme()
@@ -183,6 +184,97 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
       ],
     }
   }, [rep, theme])
+
+  // 分桶归因柱状图（理论 1 股累计盈亏柱 + 实际胜率 vs 模型均价双折线）
+  const attrOption = useMemo<EChartsOption | null>(() => {
+    if (!rep) return null
+    const raw =
+      attrDim === 'edge'
+        ? (rep.byEdge ?? [])
+        : attrDim === 'ask'
+          ? (rep.byAsk ?? [])
+          : attrDim === 'tau'
+            ? (rep.byTau ?? [])
+            : (rep.bySeries ?? [])
+    if (raw.length === 0) return null
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const ok = cssVar('--us-up') || cssVar('--ok')
+    const bad = cssVar('--us-down') || cssVar('--bad')
+    const accent = cssVar('--accent')
+    const warn = cssVar('--warn')
+    const labels = raw.map((b) => (attrDim === 'series' ? b.key.replace('-up-or-down-', ' ').toUpperCase() : b.key))
+    return {
+      animation: false,
+      grid: { left: 56, right: 52, top: 36, bottom: 40 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 12, itemHeight: 8 },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLine: { lineStyle: { color: line } },
+        axisLabel: { color: ink, fontSize: 11, interval: 0 },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '1股理论盈亏 ($)',
+          nameTextStyle: { color: ink, fontSize: 11 },
+          splitLine: { lineStyle: { color: line, type: 'dashed' } },
+          axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}` },
+        },
+        {
+          type: 'value',
+          name: '胜率 / 均价',
+          min: 0,
+          max: 100,
+          nameTextStyle: { color: ink, fontSize: 11 },
+          splitLine: { show: false },
+          axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` },
+        },
+      ],
+      series: [
+        {
+          name: '理论1股累计盈亏',
+          type: 'bar',
+          barMaxWidth: 32,
+          data: raw.map((b) => ({
+            value: +b.theoreticalPnL.toFixed(2),
+            itemStyle: {
+              color: b.theoreticalPnL >= 0 ? ok : bad,
+              borderRadius: b.theoreticalPnL >= 0 ? [4, 4, 0, 0] : [0, 0, 4, 4],
+            },
+          })),
+        },
+        {
+          name: '实际胜率 (%)',
+          type: 'line',
+          yAxisIndex: 1,
+          data: raw.map((b) => (b.resolved > 0 ? +(b.winRate * 100).toFixed(1) : null)),
+          symbolSize: 7,
+          lineStyle: { color: accent, width: 2 },
+          itemStyle: { color: accent },
+        },
+        {
+          name: '模型均价 (%)',
+          type: 'line',
+          yAxisIndex: 1,
+          data: raw.map((b) => +(b.avgModelP * 100).toFixed(1)),
+          symbolSize: 6,
+          lineStyle: { color: warn, width: 1.5, type: 'dashed' },
+          itemStyle: { color: warn },
+        },
+      ],
+    }
+  }, [rep, attrDim, theme])
 
   const inputCls =
     'h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2.5 text-xs mono text-[var(--ink)] focus:border-[var(--accent)] focus:outline-none'
@@ -328,7 +420,7 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
             <div className="panel p-3.5">
               <div className="text-xs text-[var(--ink-2)]">成交额 ROI / 手续费</div>
               <div className="mt-1 text-lg font-bold mono">
-                <span className={rep.replay.roiOnVolume >= 0 ? 'up' : 'down'}>{(rep.replay.roiOnVolume * 100).toFixed(2)}%</span>
+                <span className={rep.replay.roiOnVolume >= 0 ? 'us-up' : 'us-down'}>{(rep.replay.roiOnVolume * 100).toFixed(2)}%</span>
               </div>
               <div className="mt-0.5 text-[11px] text-[var(--ink-3)] mono">
                 额 {money(rep.replay.totalGross)} · 费 {money(rep.replay.totalFees)}
@@ -337,7 +429,7 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
             <div className="panel p-3.5">
               <div className="text-xs text-[var(--ink-2)]">最大回撤 / 平均滑点</div>
               <div className="mt-1 text-lg font-bold mono">
-                <span className="down">{(rep.replay.maxDD * 100).toFixed(2)}%</span>
+                <span className="us-down">{(rep.replay.maxDD * 100).toFixed(2)}%</span>
               </div>
               <div className="mt-0.5 text-[11px] text-[var(--ink-3)] mono">
                 滑点 {rep.replay.avgSlippage >= 0 ? '+' : ''}
@@ -372,6 +464,35 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
               {curveOption ? <EChart option={curveOption} height={240} /> : <div className="empty">无成交记录</div>}
             </section>
           </div>
+
+          {/* 分桶归因可视化柱状图 */}
+          {attrOption && (
+            <section className="panel overflow-hidden">
+              <div className="panel-head border-b border-[var(--line)]">
+                <strong className="text-sm font-semibold">分桶归因对比图（绿盈红亏）</strong>
+                <span className="text-xs text-[var(--ink-2)]">
+                  柱状为理论 1 股累计盈亏，折线对比实际胜率与模型均价（快速识别过自信区间）
+                </span>
+                <div className="seg ml-auto">
+                  {(
+                    [
+                      ['edge', '按 Edge 区间'],
+                      ['ask', '按卖一价格'],
+                      ['tau', '按剩余时间 τ'],
+                      ['series', '按系列'],
+                    ] as const
+                  ).map(([k, lbl]) => (
+                    <button key={k} className={attrDim === k ? 'on' : ''} onClick={() => setAttrDim(k)}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="p-3">
+                <EChart option={attrOption} height={260} />
+              </div>
+            </section>
+          )}
 
           {/* 分层表：Edge 分桶 / 卖一价格分桶 / 起始价来源 / 剩余时间 / 系列 */}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -483,7 +604,7 @@ function BucketTable({ title, rows, labelOf }: { title: string; rows: PMBucketSt
                 <td className="num mono">{(b.avgAsk * 100).toFixed(1)}¢</td>
                 <td className="num mono">{b.resolved > 0 ? b.brier.toFixed(4) : '—'}</td>
                 <td className="num mono">
-                  <span className={b.theoreticalPnL > 0 ? 'up' : b.theoreticalPnL < 0 ? 'down' : ''}>
+                  <span className={b.theoreticalPnL > 0 ? 'us-up' : b.theoreticalPnL < 0 ? 'us-down' : ''}>
                     {b.theoreticalPnL >= 0 ? '+' : ''}
                     {b.theoreticalPnL.toFixed(2)}
                   </span>
