@@ -80,6 +80,7 @@ type Strategy struct {
 	Exposure float64   `json:"exposure"` // 持仓天数占比
 	Switches int       `json:"switches"` // 开平仓次数
 	Equity   []float64 `json:"equity"`
+	Position []float64 `json:"position"` // 每日收盘后的目标仓位（0–1），与 Result.Dates 对齐
 }
 
 // Result 是一次回测的完整输出。
@@ -332,7 +333,7 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 	}
 	// p[i] 为第 i 日收盘后的仓位（0–1），决定第 i+1 日的收益；未持仓部分收益为 0，不计交易成本。
 	mk := func(name, label string, p []float64) Strategy {
-		s := Strategy{Name: name, Label: label, Equity: make([]float64, n)}
+		s := Strategy{Name: name, Label: label, Equity: make([]float64, n), Position: make([]float64, n)}
 		eq, peak, held := 1.0, 1.0, 0.0
 		for k := 0; k < n; k++ {
 			i := lo + k
@@ -346,6 +347,7 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 			peak = math.Max(peak, eq)
 			s.MaxDD = math.Min(s.MaxDD, eq/peak-1)
 			s.Equity[k] = eq
+			s.Position[k] = p[i]
 		}
 		s.TotalRet = eq - 1
 		if n > 1 {
