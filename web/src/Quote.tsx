@@ -1,14 +1,29 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, CandlestickChart, Search, X } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, CandlestickChart, NotebookPen, Search, Star, Wallet, X } from 'lucide-react'
 import { api, type SecurityHit, type SecuritySeries } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
 import { useTheme } from './theme'
-import { RENDERERS, useKlineRenderer, type KlineData } from './kline/kline'
+import { RENDERERS, useKlineRenderer, type KlineData, type KlineMarker } from './kline/kline'
 import { NotesBox } from './NotesBox'
+import { useToast } from './ui/Feedback'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 const MAS = [20, 60, 250]
+const RECENT_KEY = 'mt-recent-securities'
+
+export type RecentSec = { kind: string; code: string; name: string }
+
+function recordRecent(item: RecentSec) {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY)
+    const list: RecentSec[] = raw ? JSON.parse(raw) : []
+    const next = [item, ...list.filter((x) => !(x.kind === item.kind && x.code === item.code))].slice(0, 6)
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+  } catch {
+    // ignore storage errors
+  }
+}
 
 function sma(xs: number[], n: number): (number | null)[] {
   const out: (number | null)[] = []
@@ -21,15 +36,25 @@ function sma(xs: number[], n: number): (number | null)[] {
   return out
 }
 
-/** 最新值在自身历史（非空、正数）中的分位，0–100。 */
-function percentile(xs: (number | null)[]): { last: number; pct: number; n: number; from: number } | null {
+/** 计算最新值分位以及 20% / 50% / 80% 历史分位带阈值。 */
+function percentileBands(xs: (number | null)[]) {
   const idx = xs.map((x, i) => (x !== null && x > 0 ? i : -1)).filter((i) => i >= 0)
   if (idx.length < 20) return null
   const vals = idx.map((i) => xs[i] as number)
   const last = vals[vals.length - 1]
   const below = vals.filter((v) => v < last).length
   const equal = vals.filter((v) => v === last).length
-  return { last, pct: ((below + 0.5 * equal) / vals.length) * 100, n: vals.length, from: idx[0] }
+  const sorted = [...vals].sort((a, b) => a - b)
+  const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)))]
+  return {
+    last,
+    pct: ((below + 0.5 * equal) / vals.length) * 100,
+    n: vals.length,
+    from: idx[0],
+    p20: q(0.2),
+    p50: q(0.5),
+    p80: q(0.8),
+  }
 }
 
 /** 当前地址中的证券：#/quote/{kind}/{code} */
@@ -42,17 +67,22 @@ type FillItem = {
   id: number; accountId: number; accountName: string; side: 'buy' | 'sell'; fillDate: string; fillPrice: number; qty: number; amount: number; note?: string
 }
 
+type ValTab = 'pe' | 'pb' | 'both'
+
 export default function Quote() {
   const [target, setTarget] = useState(fromHash)
   const [data, setData] = useState<SecuritySeries | null>(null)
   const [fills, setFills] = useState<FillItem[]>([])
   const [mode, setMode] = useState<'qfq' | 'hfq' | 'none'>('qfq')
+  const [valTab, setValTab] = useState<ValTab>('pe')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SecurityHit[]>([])
   const [openHits, setOpenHits] = useState(false)
   const [error, setError] = useState('')
   const searchRef = useRef<HTMLDivElement>(null)
+  const notesRef = useRef<HTMLDivElement>(null)
   const { theme } = useTheme()
+  const toast = useToast()
 
   useEffect(() => {
     const on = () => setTarget(fromHash())
@@ -72,10 +102,16 @@ export default function Quote() {
     if (!target) return
     setError('')
     setFills([])
-    api.securitySeries(target.kind, target.code).then(setData, (e) => {
-      setData(null)
-      setError(e.message)
-    })
+    api.securitySeries(target.kind, target.code).then(
+      (res) => {
+        setData(res)
+        recordRecent({ kind: res.kind, code: res.code, name: res.name || res.code })
+      },
+      (e) => {
+        setData(null)
+        setError(e.message)
+      },
+    )
     if (target.kind === 'stock' || target.kind === 'fund') {
       api.securityFills(target.kind, target.code).then(setFills, () => {})
     }
@@ -128,6 +164,13 @@ export default function Quote() {
     const colors = [cssVar('--t-hot-1'), cssVar('--t-cold-2'), cssVar('--dim-2')]
     const scaled = (xs: (number | null)[] | undefined) =>
       hasK && xs ? xs.map((x, i) => (x === null ? null : (x * prices[i]) / data.close[i])) : null
+    const markers: KlineMarker[] = fills.map((fl) => ({
+      date: fl.fillDate,
+      side: fl.side,
+      text: fl.side === 'buy' ? `买 ${fl.qty}` : `卖 ${fl.qty}`,
+      price: fl.fillPrice,
+      detail: `${fl.fillDate} [${fl.accountName}] ${fl.side === 'buy' ? '买入' : '卖出'} ${fl.qty} 股 @ ${fl.fillPrice.toFixed(3)}`,
+    }))
     return {
       dates: data.dates,
       close: prices,
@@ -136,73 +179,155 @@ export default function Quote() {
       low: scaled(data.low),
       volume: hasK ? (data.volume ?? null) : null,
       lines: data.kind === 'ofund' ? [] : MAS.map((n, i) => ({ name: `MA${n}`, color: colors[i], data: sma(prices, n) })),
+      markers,
       title: hasK ? `K 线（${modeText}）` : data.kind === 'ofund' ? modeText : `收盘（${modeText}）`,
     }
-  }, [data, prices, modeText, hasK, theme])
+  }, [data, prices, modeText, hasK, fills, theme])
 
   const [renderer, setRenderer] = useKlineRenderer()
 
   const valuation = useMemo(() => {
     if (!data?.peTtm || !data.pb) return null
-    const pe = percentile(data.peTtm)
-    const pb = percentile(data.pb)
+    const pe = percentileBands(data.peTtm)
+    const pb = percentileBands(data.pb)
     if (!pe && !pb) return null
     const ink = cssVar('--ink-2')
     const inkMain = cssVar('--ink')
     const line = cssVar('--chart-grid') || cssVar('--line')
+    const cold = cssVar('--t-cold-2')
+    const hot = cssVar('--t-hot-2')
+    const coldBg = cssVar('--t-cold-bg')
+    const hotBg = cssVar('--t-hot-bg')
     const from = Math.min(pe?.from ?? Infinity, pb?.from ?? Infinity)
     const dates = data.dates.slice(from)
-    const option: EChartsOption = {
-      animation: false,
-      tooltip: {
-        trigger: 'axis',
-        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
-        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
-        borderWidth: 1,
-        textStyle: { color: inkMain, fontSize: 12 },
-        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : '—'),
+    const peSeries = data.peTtm.slice(from).map((x) => (x !== null && x > 0 ? x : null))
+    const pbSeries = data.pb.slice(from)
+
+    const effectiveTab: ValTab = valTab === 'pe' && !pe ? 'pb' : valTab === 'pb' && !pb ? 'pe' : valTab
+
+    const makeBands = (b: NonNullable<typeof pe>) => ({
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        lineStyle: { type: 'dashed' as const, width: 1.1 },
+        label: { fontSize: 10.5, position: 'insideEndTop' as const },
+        data: [
+          { yAxis: b.p20, lineStyle: { color: cold }, label: { formatter: `20% 低估 ${b.p20.toFixed(2)}`, color: cold } },
+          { yAxis: b.p50, lineStyle: { color: ink }, label: { formatter: `50% 中位 ${b.p50.toFixed(2)}`, color: ink } },
+          { yAxis: b.p80, lineStyle: { color: hot }, label: { formatter: `80% 高估 ${b.p80.toFixed(2)}`, color: hot } },
+        ],
       },
-      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
-      grid: { left: 52, right: 52, top: 34, bottom: 50 },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-        axisLine: { lineStyle: { color: line } },
-        axisTick: { show: false },
-        axisLabel: { color: ink, fontSize: 11 },
+      markArea: {
+        silent: true,
+        data: [
+          [{ yAxis: 0, itemStyle: { color: coldBg } }, { yAxis: b.p20 }],
+          [{ yAxis: b.p80, itemStyle: { color: hotBg } }, { yAxis: Math.max(b.p80 * 1.4, b.last * 1.1) }],
+        ],
       },
-      yAxis: [
-        { type: 'value', scale: true, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } },
-        { type: 'value', scale: true, splitLine: { show: false }, axisLabel: { color: ink, fontSize: 11 } },
-      ],
-      dataZoom: [
-        { type: 'inside' },
-        { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
-      ],
-      series: [
-        {
-          name: 'PE(TTM)（左轴）',
-          type: 'line',
-          data: data.peTtm.slice(from).map((x) => (x !== null && x > 0 ? x : null)),
-          showSymbol: false,
-          connectNulls: false,
-          lineStyle: { width: 1.8, color: cssVar('--accent') },
-          itemStyle: { color: cssVar('--accent') },
-        },
-        {
-          name: 'PB（右轴）',
-          type: 'line',
-          yAxisIndex: 1,
-          data: data.pb.slice(from),
-          showSymbol: false,
-          lineStyle: { width: 1.5, color: cssVar('--t-hot-1') },
-          itemStyle: { color: cssVar('--t-hot-1') },
-        },
-      ],
-    }
-    return { pe, pb, option, from: data.dates[from] }
-  }, [data, theme])
+    })
+
+    const option: EChartsOption =
+      effectiveTab === 'both'
+        ? {
+            animation: false,
+            tooltip: {
+              trigger: 'axis',
+              backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+              borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+              borderWidth: 1,
+              textStyle: { color: inkMain, fontSize: 12 },
+              valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : '—'),
+            },
+            legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
+            grid: { left: 52, right: 52, top: 34, bottom: 50 },
+            xAxis: {
+              type: 'category',
+              data: dates,
+              boundaryGap: false,
+              axisLine: { lineStyle: { color: line } },
+              axisTick: { show: false },
+              axisLabel: { color: ink, fontSize: 11 },
+            },
+            yAxis: [
+              { type: 'value', scale: true, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } },
+              { type: 'value', scale: true, splitLine: { show: false }, axisLabel: { color: ink, fontSize: 11 } },
+            ],
+            dataZoom: [
+              { type: 'inside' },
+              { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+            ],
+            series: [
+              {
+                name: 'PE(TTM)（左轴）',
+                type: 'line',
+                data: peSeries,
+                showSymbol: false,
+                connectNulls: false,
+                lineStyle: { width: 1.8, color: cssVar('--accent') },
+                itemStyle: { color: cssVar('--accent') },
+              },
+              {
+                name: 'PB（右轴）',
+                type: 'line',
+                yAxisIndex: 1,
+                data: pbSeries,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: cssVar('--t-hot-1') },
+                itemStyle: { color: cssVar('--t-hot-1') },
+              },
+            ],
+          }
+        : (() => {
+            const isPe = effectiveTab === 'pe'
+            const b = (isPe ? pe : pb)!
+            const c = isPe ? cssVar('--accent') : cssVar('--t-hot-1')
+            const bands = makeBands(b)
+            return {
+              animation: false,
+              tooltip: {
+                trigger: 'axis',
+                backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+                borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+                borderWidth: 1,
+                textStyle: { color: inkMain, fontSize: 12 },
+                valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : '—'),
+              },
+              legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
+              grid: { left: 52, right: 24, top: 34, bottom: 50 },
+              xAxis: {
+                type: 'category',
+                data: dates,
+                boundaryGap: false,
+                axisLine: { lineStyle: { color: line } },
+                axisTick: { show: false },
+                axisLabel: { color: ink, fontSize: 11 },
+              },
+              yAxis: {
+                type: 'value',
+                scale: true,
+                splitLine: { lineStyle: { color: line, type: 'dashed' } },
+                axisLabel: { color: ink, fontSize: 11 },
+              },
+              dataZoom: [
+                { type: 'inside' },
+                { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+              ],
+              series: [
+                {
+                  name: isPe ? 'PE(TTM)' : '市净率 PB',
+                  type: 'line',
+                  data: isPe ? peSeries : pbSeries,
+                  showSymbol: false,
+                  connectNulls: false,
+                  lineStyle: { width: 2, color: c },
+                  itemStyle: { color: c },
+                  ...bands,
+                },
+              ],
+            }
+          })()
+    return { pe, pb, option, effectiveTab, from: data.dates[from] }
+  }, [data, valTab, theme])
 
   const n = prices.length
   const stats =
@@ -218,6 +343,14 @@ export default function Quote() {
 
   const rangePos = stats && stats.hi > stats.lo ? ((stats.last - stats.lo) / (stats.hi - stats.lo)) * 100 : 50
 
+  const quickWatch = () => {
+    if (!data || (data.kind !== 'stock' && data.kind !== 'fund')) return
+    api.watchStock(data.kind, data.code).then(
+      () => toast.success(`已将 ${data.code} ${data.name || ''} 加入选股器自选`),
+      (e: Error) => toast.error(e.message),
+    )
+  }
+
   return (
     <div className="page">
       {/* 顶部标题 + 悬浮式证券搜索栏 */}
@@ -225,7 +358,7 @@ export default function Quote() {
         <div>
           <h1 className="m-0">行情图表</h1>
           <p className="sub mt-1">
-            本地日线与估值分位。股票含扩展数据时展示 K 线、成交量与 PE / PB；场内外基金展示收盘价或净值。
+            本地日线、模拟盘买卖点叠加与历史估值分位带。股票含扩展数据时展示 K 线、成交量与 PE / PB 分位。
           </p>
         </div>
 
@@ -291,16 +424,17 @@ export default function Quote() {
 
       {data && (
         <section className="panel overflow-hidden">
-          {/* 证券信息与关键行情条 */}
+          {/* 证券信息与关键行情条 + 快捷操作 */}
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
             <div className="flex flex-wrap items-center gap-4">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-lg font-bold tracking-tight text-[var(--ink)]">{data.name || data.code}</span>
                   <span className="mono rounded bg-[var(--panel-2)] px-1.5 py-0.5 text-xs text-[var(--ink-2)]">
                     {data.code}
                   </span>
                   <span className="tag tag-muted">{KIND_TEXT[data.kind]}</span>
+                  {fills.length > 0 && <span className="tag tag-cold">含 {fills.length} 笔模拟成交标注</span>}
                 </div>
                 {stats && (
                   <div className="mt-1 flex flex-wrap items-center gap-2.5">
@@ -310,9 +444,9 @@ export default function Quote() {
                     <span
                       className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold mono ${
                         stats.d1 > 0
-                          ? 'bg-[color-mix(in_srgb,#ef4444_14%,transparent)] text-[#ef4444]'
+                          ? 'bg-[color-mix(in_srgb,var(--cn-up)_14%,transparent)] up'
                           : stats.d1 < 0
-                            ? 'bg-[color-mix(in_srgb,#10b981_14%,transparent)] text-[#10b981]'
+                            ? 'bg-[color-mix(in_srgb,var(--cn-down)_14%,transparent)] down'
                             : 'bg-[var(--panel-2)] text-[var(--ink-2)]'
                       }`}
                     >
@@ -353,6 +487,30 @@ export default function Quote() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {(data.kind === 'stock' || data.kind === 'fund') && (
+                <>
+                  <button type="button" className="btn btn-ghost h-8 px-2.5 text-xs" onClick={quickWatch} title="加入自选股">
+                    <Star className="h-3.5 w-3.5 text-[var(--warn)]" />
+                    加自选
+                  </button>
+                  <a
+                    href={`#/sim?code=${encodeURIComponent(data.code)}&name=${encodeURIComponent(data.name || '')}`}
+                    className="btn h-8 px-2.5 text-xs"
+                    title="带入此标的到 A 股模拟盘下单"
+                  >
+                    <Wallet className="h-3.5 w-3.5" />
+                    模拟下单
+                  </a>
+                </>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost h-8 px-2.5 text-xs"
+                onClick={() => notesRef.current?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                <NotebookPen className="h-3.5 w-3.5" />
+                记笔记
+              </button>
               <div className="seg" title="图表引擎（保存在本浏览器）">
                 {RENDERERS.map((r) => (
                   <button key={r.id} className={r.id === renderer.id ? 'on' : ''} onClick={() => setRenderer(r.id)}>
@@ -409,8 +567,8 @@ export default function Quote() {
         <section className="panel overflow-hidden">
           <div className="panel-head border-b border-[var(--line)]">
             <strong>模拟盘成交复盘（{fills.length} 笔）</strong>
-            <span className="muted text-xs">来自本地 A 股模拟盘已成交委托</span>
-            <a href="#/sim" className="btn btn-ghost text-xs" style={{ marginLeft: 'auto' }}>
+            <span className="muted text-xs">已直接标注在上方 K 线图上（红买 ▲ / 绿卖 ▼）</span>
+            <a href="#/sim" className="btn btn-ghost ml-auto text-xs">
               前往模拟盘 →
             </a>
           </div>
@@ -430,10 +588,10 @@ export default function Quote() {
               <tbody>
                 {fills.map((fl) => (
                   <tr key={fl.id}>
-                    <td className="mono small">{fl.fillDate}</td>
-                    <td className="small">{fl.accountName}</td>
+                    <td className="mono small nowrap">{fl.fillDate}</td>
+                    <td className="small nowrap">{fl.accountName}</td>
                     <td>
-                      <span className={`tag ${fl.side === 'buy' ? 'tag-hot' : 'tag-cold'}`}>{fl.side === 'buy' ? '买入' : '卖出'}</span>
+                      <span className={`tag ${fl.side === 'buy' ? 'tag-hot' : 'tag-ok'}`}>{fl.side === 'buy' ? '买入' : '卖出'}</span>
                     </td>
                     <td className="num mono small">{fl.fillPrice.toFixed(3)}</td>
                     <td className="num mono small">{fl.qty.toLocaleString('zh-CN')}</td>
@@ -449,35 +607,58 @@ export default function Quote() {
 
       {valuation && (
         <section className="panel overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3.5">
-            <div className="flex flex-wrap items-center gap-3">
-              <strong className="text-sm font-semibold">历史估值</strong>
-              {valuation.pe && (
-                <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-subtle)] px-2.5 py-1 text-xs">
-                  <span className="text-[var(--ink-2)]">PE(TTM)</span>
-                  <strong className="mono text-[var(--ink)]">{valuation.pe.last.toFixed(2)}</strong>
-                  <span className="tag tag-cold">{valuation.pe.pct.toFixed(0)}% 分位</span>
+          <div className="panel-head border-b border-[var(--line)]">
+            <strong className="text-sm font-semibold">历史估值与分位带</strong>
+            {valuation.pe && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-subtle)] px-2.5 py-1 text-xs">
+                <span className="text-[var(--ink-2)]">PE(TTM)</span>
+                <strong className="mono text-[var(--ink)]">{valuation.pe.last.toFixed(2)}</strong>
+                <span className={`tag ${valuation.pe.pct <= 30 ? 'tag-cold' : valuation.pe.pct >= 70 ? 'tag-hot' : 'tag-muted'}`}>
+                  {valuation.pe.pct.toFixed(0)}% 分位
                 </span>
+              </span>
+            )}
+            {valuation.pb && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-subtle)] px-2.5 py-1 text-xs">
+                <span className="text-[var(--ink-2)]">PB</span>
+                <strong className="mono text-[var(--ink)]">{valuation.pb.last.toFixed(2)}</strong>
+                <span className={`tag ${valuation.pb.pct <= 30 ? 'tag-cold' : valuation.pb.pct >= 70 ? 'tag-hot' : 'tag-muted'}`}>
+                  {valuation.pb.pct.toFixed(0)}% 分位
+                </span>
+              </span>
+            )}
+            <div className="seg ml-auto">
+              {valuation.pe && (
+                <button className={valuation.effectiveTab === 'pe' ? 'on' : ''} onClick={() => setValTab('pe')}>
+                  PE 分位带
+                </button>
               )}
               {valuation.pb && (
-                <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--bg-subtle)] px-2.5 py-1 text-xs">
-                  <span className="text-[var(--ink-2)]">PB</span>
-                  <strong className="mono text-[var(--ink)]">{valuation.pb.last.toFixed(2)}</strong>
-                  <span className="tag tag-hot">{valuation.pb.pct.toFixed(0)}% 分位</span>
-                </span>
+                <button className={valuation.effectiveTab === 'pb' ? 'on' : ''} onClick={() => setValTab('pb')}>
+                  PB 分位带
+                </button>
+              )}
+              {valuation.pe && valuation.pb && (
+                <button className={valuation.effectiveTab === 'both' ? 'on' : ''} onClick={() => setValTab('both')}>
+                  PE / PB 双轴
+                </button>
               )}
             </div>
-            <span className="text-xs text-[var(--ink-3)]">
-              自 {valuation.from} 起 · 来源 stockdb（亏损期 PE 不计入）
-            </span>
           </div>
           <div className="p-3">
-            <EChart option={valuation.option} height={320} />
+            <EChart option={valuation.option} height={330} />
           </div>
+          <p className="disclaimer border-t border-[var(--line)] px-5 py-2.5">
+            自 {valuation.from} 起 · 来源 stockdb（亏损期 PE 不计入）；蓝区 ≤20% 历史低估，红区 ≥80% 历史高估。
+          </p>
         </section>
       )}
 
-      {data && <NotesBox target={`${data.kind}:${data.code}`} label={`${data.code} ${data.name}`} />}
+      {data && (
+        <div ref={notesRef}>
+          <NotesBox target={`${data.kind}:${data.code}`} label={`${data.code} ${data.name}`} />
+        </div>
+      )}
 
       {!data && !error && (
         <div className="panel flex flex-col items-center justify-center gap-3 py-20 text-center">

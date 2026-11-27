@@ -86,7 +86,7 @@ const PAGES: PageDef[] = [
 ]
 
 function currentPath() {
-  const p = location.hash.replace(/^#\/?/, '').split('/')[0]
+  const p = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0]
   return PAGES.some((x) => x.path === p) ? p : PAGES[0].path
 }
 
@@ -355,7 +355,13 @@ export default function App() {
         </main>
       </div>
 
-      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} items={PAGES} />
+      <CommandPalette
+        open={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        items={PAGES}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
     </div>
   )
 }

@@ -281,16 +281,39 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
   )
 }
 
+function parseSimQuery() {
+  const idx = location.hash.indexOf('?')
+  if (idx < 0) return { code: '', name: '' }
+  const sp = new URLSearchParams(location.hash.slice(idx + 1))
+  return { code: sp.get('code') ?? '', name: sp.get('name') ?? '' }
+}
+
 function OrderForm({ accountId, onPlaced, onError }: { accountId: number; onPlaced: () => void; onError: (s: string) => void }) {
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SecurityHit[]>([])
   const [open, setOpen] = useState(false)
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(() => parseSimQuery().code)
+  const [selectedName, setSelectedName] = useState(() => parseSimQuery().name)
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [qty, setQty] = useState(100)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
+  const secRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    const syncQuery = () => {
+      const parsed = parseSimQuery()
+      if (parsed.code) {
+        setCode(parsed.code)
+        setSelectedName(parsed.name)
+        setTimeout(() => secRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120)
+      }
+    }
+    syncQuery()
+    window.addEventListener('hashchange', syncQuery)
+    return () => window.removeEventListener('hashchange', syncQuery)
+  }, [])
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -318,13 +341,21 @@ function OrderForm({ accountId, onPlaced, onError }: { accountId: number; onPlac
     }
   }
   return (
-    <section className="panel">
-      <div className="panel-head"><strong>手工下单</strong><span className="muted">按最新收盘价做风控检查；在下一个交易日收盘成交</span></div>
+    <section ref={secRef} className="panel">
+      <div className="panel-head">
+        <strong>手工下单</strong>
+        {code && (
+          <span className="tag tag-cold mono">
+            已选 {code} {selectedName}
+          </span>
+        )}
+        <span className="muted">按最新收盘价做风控检查；在下一个交易日收盘成交</span>
+      </div>
       <div className="sim-order">
         <div ref={boxRef} className="relative min-w-60 flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ink-3)]" />
           <input
-            placeholder={code ? `已选 ${code}，可重新搜索` : '搜索股票或场内基金…'}
+            placeholder={code ? `已选 ${code}${selectedName ? ' ' + selectedName : ''}，可重新搜索` : '搜索股票或场内基金…'}
             value={q}
             onFocus={() => hits.length > 0 && setOpen(true)}
             onChange={(e) => setQ(e.target.value)}
@@ -341,7 +372,7 @@ function OrderForm({ accountId, onPlaced, onError }: { accountId: number; onPlac
                 <li key={h.kind + h.code}>
                   <button
                     type="button"
-                    onClick={() => { setCode(h.code); setQ(''); setHits([]); setOpen(false) }}
+                    onClick={() => { setCode(h.code); setSelectedName(h.name || ''); setQ(''); setHits([]); setOpen(false) }}
                     className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-[var(--ink)] hover:bg-[var(--panel-2)]"
                   >
                     <span><span className="mono font-semibold text-[var(--accent)]">{h.code}</span> {h.name || '（无名称）'}</span>

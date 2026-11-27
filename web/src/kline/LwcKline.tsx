@@ -2,8 +2,8 @@
 // （库的类型说明：保留 attributionLogo 即满足链接要求）。
 import { useEffect, useRef, useState } from 'react'
 import {
-  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart,
-  type IChartApi, type MouseEventParams, type Time,
+  CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers,
+  type IChartApi, type MouseEventParams, type SeriesMarker, type Time,
 } from 'lightweight-charts'
 import { cssVar } from '../EChart'
 import { useTheme } from '../theme'
@@ -36,12 +36,16 @@ export default function LwcKline({ data, height }: KlineProps) {
     const ink = cssVar('--ink-2'), line = cssVar('--chart-grid') || cssVar('--line')
     const chart: IChartApi = createChart(el, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: ink, fontSize: 12,
-        panes: { separatorColor: line, separatorHoverColor: line } },
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: ink,
+        fontSize: 12,
+        panes: { separatorColor: line, separatorHoverColor: line },
+      },
       grid: { vertLines: { color: line }, horzLines: { color: line } },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: line },
-      timeScale: { borderColor: line, rightOffset: 4 },
+      rightPriceScale: { borderColor: line, scaleMargins: { top: 0.1, bottom: 0.08 } },
+      timeScale: { borderColor: line, rightOffset: 5 },
       localization: { locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' },
     })
     // 库按 UTC 显示时间戳：日内数据加上本地时区偏移，让坐标轴显示本地时间
@@ -53,19 +57,40 @@ export default function LwcKline({ data, height }: KlineProps) {
     const priceFormat = { type: 'price' as const, precision: digits, minMove: 10 ** -digits }
     const { open, high, low, volume } = data
     const candle = !!(open && high && low)
+    const mainSeries = candle
+      ? chart.addSeries(CandlestickSeries, {
+          upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN, wickUpColor: UP, wickDownColor: DOWN,
+          priceLineVisible: false, priceFormat,
+        }, 0)
+      : chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 2, priceLineVisible: false, priceFormat }, 0)
+
     if (candle) {
-      const s = chart.addSeries(CandlestickSeries, {
-        upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN, wickUpColor: UP, wickDownColor: DOWN,
-        priceLineVisible: false, priceFormat,
-      }, 0)
-      s.setData(data.dates.map((_, i) => {
+      mainSeries.setData(data.dates.map((_, i) => {
         const o = open[i], h = high[i], l = low[i]
         return o === null || h === null || l === null ? { time: t(i) } : { time: t(i), open: o, high: h, low: l, close: data.close[i] }
       }))
     } else {
-      const s = chart.addSeries(LineSeries, { color: cssVar('--accent'), lineWidth: 2, priceLineVisible: false, priceFormat }, 0)
-      s.setData(data.dates.map((_, i) => ({ time: t(i), value: data.close[i] })))
+      mainSeries.setData(data.dates.map((_, i) => ({ time: t(i), value: data.close[i] })))
     }
+
+    // 叠加模拟盘买卖点标记（Lightweight Charts v5 createSeriesMarkers）
+    if (data.markers && data.markers.length > 0 && !times) {
+      const dateSet = new Set(data.dates)
+      const ms: SeriesMarker<Time>[] = data.markers
+        .filter((m) => dateSet.has(m.date))
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((m) => ({
+          time: m.date as Time,
+          position: m.side === 'buy' ? 'belowBar' : 'aboveBar',
+          color: m.side === 'buy' ? UP : DOWN,
+          shape: m.side === 'buy' ? 'arrowUp' : 'arrowDown',
+          text: m.text,
+          size: 1.2,
+        }))
+      if (ms.length > 0) createSeriesMarkers(mainSeries, ms)
+    }
+
     for (const l of data.lines) {
       const s = chart.addSeries(LineSeries, { color: l.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0)
       s.setData(l.data.map((v, i) => (v === null ? { time: t(i) } : { time: t(i), value: v })))
@@ -77,7 +102,7 @@ export default function LwcKline({ data, height }: KlineProps) {
       chart.panes()[1]?.setStretchFactor(0.28)
     }
     const n = data.dates.length
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 250), to: n + 4 }) // 默认最近约一年
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 250), to: n + 5 }) // 默认最近约一年
     setLegend(legendAt(data, n - 1))
     const index = new Map(data.dates.map((_, i) => [String(t(i)), i]))
     const onMove = (p: MouseEventParams) => {
@@ -91,19 +116,35 @@ export default function LwcKline({ data, height }: KlineProps) {
     }
   }, [data, theme])
 
+  const barH = 30
   return (
-    <div className="lwc-wrap" style={{ height }}>
-      <div ref={box} className="lwc-box" />
+    <div className="flex flex-col" style={{ height }}>
+      {/* 独立顶部 OHLCV 信息条，避免遮挡 K 线顶部价格刻度 */}
       {legend && (
-        <div className="lwc-legend mono">
-          <span>{legend.date}</span>
+        <div className="flex min-h-[30px] flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--line)] bg-[var(--bg-subtle)]/60 px-3 py-1 text-xs mono">
+          <span className="font-medium text-[var(--ink)]">{legend.date}</span>
           <span className="muted">{data.title}</span>
-          {legend.o !== undefined && <span>开 {fmt(legend.o, data.digits)} 高 {fmt(legend.h, data.digits)} 低 {fmt(legend.l, data.digits)}</span>}
-          <span>收 {fmt(legend.c, data.digits)}</span>
-          {legend.lines.map((x) => <span key={x.name} style={{ color: x.color }}>{x.name} {fmt(x.v, data.digits)}</span>)}
+          {legend.o !== undefined && (
+            <span className="text-[var(--ink-2)]">
+              开 <strong className="text-[var(--ink)]">{fmt(legend.o, data.digits)}</strong>{' '}
+              高 <strong className="up">{fmt(legend.h, data.digits)}</strong>{' '}
+              低 <strong className="down">{fmt(legend.l, data.digits)}</strong>
+            </span>
+          )}
+          <span className="text-[var(--ink-2)]">
+            收 <strong className="text-[var(--ink)]">{fmt(legend.c, data.digits)}</strong>
+          </span>
+          {legend.lines.map((x) => (
+            <span key={x.name} style={{ color: x.color }}>
+              {x.name} {fmt(x.v, data.digits)}
+            </span>
+          ))}
           {legend.v !== undefined && <span className="muted">量 {fmtVol(legend.v, data.volUnit)}</span>}
         </div>
       )}
+      <div className="relative flex-1" style={{ minHeight: Math.max(200, height - barH) }}>
+        <div ref={box} className="absolute inset-0 px-2 pb-1" />
+      </div>
     </div>
   )
 }

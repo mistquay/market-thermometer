@@ -4,6 +4,14 @@ import { lazy, useState, type ComponentType, type LazyExoticComponent } from 're
 
 export type Num = number | null
 
+export type KlineMarker = {
+  date: string
+  side: 'buy' | 'sell'
+  text: string
+  price?: number
+  detail?: string
+}
+
 /** 已按当前复权方式换算好的价格数据，与日期一一对应。 */
 export type KlineData = {
   dates: string[]
@@ -13,6 +21,7 @@ export type KlineData = {
   low: Num[] | null
   volume: Num[] | null // 股
   lines: { name: string; color: string; data: Num[] }[] // 均线等叠加线
+  markers?: KlineMarker[] // 模拟盘成交买卖点等事件标记
   title: string // 主序列名，如 “K 线（前复权）”
   /** 日内 K 线：与 dates 一一对应的 Unix 秒（UTC）；有它时按时间轴画（显示本地时间），dates 只用作图例文字。 */
   times?: number[]
