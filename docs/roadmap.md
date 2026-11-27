@@ -102,5 +102,9 @@
   - 已完成：币安 / OKX K 线插件与同步、Polymarket 只读插件与同步、加密页与预测页。
   - 自动交易围绕 Polymarket：先采集盘口，再做模拟盘，最后在海外服务器实盘，授权逐级放开。
   - 详见 `docs/polymarket.md`。
+- **2026-11-27 迭代（底座加固 + Polymarket 评估/套利/HITL + A 股投研深化）**：
+  - **底座与运维**：高频盘口/现货快照拆分独立库 `*-tick.db`（自动一次性迁移旧数据，消除与 A 股长同步的写锁争用并减小主库备份）；新增无鉴权 `/healthz`、日志轮转 `mt serve -log`、追加式审计日志表 `audit_log`、推送运维告警开关（盘口采集中断/恢复、同步失败、全局熔断）、Web 可配置 A 股调度窗口、数据质量页增加 24h 高频采集连续性监控、修复插件管理页加密/预测源启用状态显示。
+  - **Polymarket 策略闭环**：新增 `internal/pmeval`（按市场首条信号去重、时间聚类、起始价来源与剩余时间分桶、概率校准 Brier Score、基于本地盘口快照 + `pm_spot` 心跳的延迟回放引擎）与 `mt pmeval` CLI + Web「信号评估与回放」Tab；新增零依赖 WebSocket 实时推送（`internal/ws` + `job.PMWSFeed`，断线自动回退 REST）；新增仓位模型（`pmstrat.KellyFraction`/`SizeUSD`）与单资产跨周期风控上限（`MaxAssetUSD`）；新增二元 & 互斥多结果扣费套利扫描器（`internal/pmarb`）；新增策略分级执行模式（`shadow` → `hitl` 人工审批提案队列 → `auto_sim` 模拟盘自动下单）；补齐核心外部进程交易通道 `KindBroker` 宿主适配（`internal/plugin/ext/broker.go`）。
+  - **A 股投研深化**：新增纯本地全市场选股器（`#/screener`，基于本地日线与扩展估值表，零外部抓取，点击直达 K 线）；组合分析新增定期/阈值再平衡与按月定投模拟；回测新增可配置交易成本（`costBps`）；新增可绑定任意标的/组合/事件的研究笔记（`research_note` + `NotesBox`）。
 
 接续工作见 `docs/handoff.md`。

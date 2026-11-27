@@ -49,6 +49,8 @@ import (
 	_ "market-thermometer/internal/notify/wecom"
 	"market-thermometer/internal/plugin"
 	"market-thermometer/internal/plugin/ext"
+	"market-thermometer/internal/pmeval"
+	"market-thermometer/internal/pmtrade"
 	"market-thermometer/internal/store"
 	_ "market-thermometer/internal/strategy/thermometer"
 	"market-thermometer/internal/web"
@@ -78,6 +80,8 @@ func main() {
 		err = cmdCrypto(os.Args[2:])
 	case "pmbook":
 		err = cmdPMBook(os.Args[2:])
+	case "pmeval":
+		err = cmdPMEval(os.Args[2:])
 	case "gapfill":
 		err = cmdGapFill(os.Args[2:])
 	case "score":
@@ -117,7 +121,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := store.Open(cfg.DBPath)
+	st, err := store.OpenWithTick(cfg.DBPath, cfg.TickDBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +218,16 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		if crypto.Configured() {
 			pmBook.WithSpot(crypto.Price)
 		}
+		if b.WS {
+			pSpot, pPM := "", ""
+			if cfg.Crypto.Proxy {
+				pSpot = cfg.HTTPProxy
+			}
+			if cfg.Polymarket.Proxy {
+				pPM = cfg.HTTPProxy
+			}
+			pmBook.WithWS(job.NewPMWSFeed(pSpot, pPM))
+		}
 	}
 	var shadow *job.PMShadow
 	if pmBook != nil && cfg.Polymarket.Strategy.Shadow {
@@ -272,9 +286,19 @@ func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	trustProxy := fs.Bool("trust-proxy", false, "信任反向代理的 X-Real-IP 头（部署在 Caddy/Nginx 之后时开启）")
 	schedule := fs.Bool("schedule", true, "启用每日定时同步与推送（交易日 17:30 起，22:00 截止）")
+	logFile := fs.String("log", "", "日志文件路径（自动按 20MB 轮转，保留 5 份；为空输出到 stderr）")
 	a, err := setup(fs, args)
 	if err != nil {
 		return err
+	}
+	if *logFile != "" {
+		rf, err := openRotatingFile(*logFile, 20<<20, 5)
+		if err != nil {
+			a.store.Close()
+			return fmt.Errorf("open log: %w", err)
+		}
+		defer rf.Close()
+		log.SetOutput(rf)
 	}
 	defer a.store.Close()
 	defer ext.CloseAll()
@@ -294,6 +318,12 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	if a.pmBook != nil {
+		a.pmBook.OnAlert(pusher.SendAlert)
+	}
+	if a.shadow != nil && a.pm.Configured() {
+		a.shadow.WithBroker(pmtrade.NewSim(a.store, a.pm.Source()), pusher)
+	}
 
 	srv := &http.Server{
 		Addr: a.cfg.Listen,
@@ -302,6 +332,7 @@ func cmdServe(args []string) error {
 			PluginOptions: builtinOptions(a.cfg),
 			Pusher:        pusher,
 			Crypto:        a.crypto,
+			CryptoSources: a.cfg.Crypto.Sources,
 			PM:            a.pm,
 			PMBook:        a.pmBook,
 			PMShadow:      a.shadow,
@@ -555,6 +586,54 @@ func cmdPMBook(args []string) error {
 		fmt.Printf("；最近错误（%s）：%s", s.ErrAt.Local().Format("15:04:05"), s.LastErr)
 	}
 	fmt.Println()
+	return nil
+}
+
+// cmdPMEval 对本地攒下的 Polymarket 影子信号做分层评估与历史盘口回放。
+func cmdPMEval(args []string) error {
+	fs := flag.NewFlagSet("pmeval", flag.ExitOnError)
+	days := fs.Int("days", 14, "评估最近多少天（0 为全部）")
+	delayMs := fs.Int64("delay", 1000, "模拟下单延迟（毫秒）")
+	minEdge := fs.Float64("min-edge", 0.03, "最小预期收益过滤")
+	ksrc := fs.String("ksrc", "", "起始价来源过滤（exact/spot/bar，空为全部）")
+	sizing := fs.String("sizing", "fixed", "仓位模式（fixed/kelly）")
+	usd := fs.Float64("usd", 20, "单笔金额或凯利上限（USDC）")
+	all := fs.Bool("all", false, "不过滤每市场重复信号（默认每市场只取第一条）")
+	a, err := setup(fs, args)
+	if err != nil {
+		return err
+	}
+	defer a.store.Close()
+	cfg := pmeval.DefaultConfig()
+	cfg.DelayMs, cfg.MinEdge, cfg.KSrc, cfg.Sizing, cfg.OrderUSD, cfg.FirstPerMarket = *delayMs, *minEdge, *ksrc, *sizing, *usd, !*all
+	var fromMs int64
+	if *days > 0 {
+		fromMs = time.Now().AddDate(0, 0, -*days).UnixMilli()
+	}
+	rep, err := job.EvaluatePMSignals(context.Background(), a.store, fromMs, 0, cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("信号：原始 %d → 过滤/去重 %d（%d 个市场，%d 个 %dm 聚类）\n",
+		rep.RawSignals, rep.FilteredSignals, rep.UniqueMarkets, rep.Clusters, cfg.ClusterMin)
+	fmt.Printf("总计：已结算 %d，胜率 %.1f%%（模型均价 %.1f%%），Brier=%.4f，均卖一 %.1f¢，理论1股累计 %+.2f\n",
+		rep.Overall.Resolved, rep.Overall.WinRate*100, rep.Overall.AvgModelP*100, rep.Overall.Brier, rep.Overall.AvgAsk*100, rep.Overall.TheoreticalPnL)
+	fmt.Println("--- 按起始价来源 ---")
+	for _, b := range rep.ByKSrc {
+		fmt.Printf("  %-6s  N=%-4d 已结算=%-4d 胜率=%5.1f%% 模型=%5.1f%% Brier=%.4f 理论1股=%+.2f\n",
+			b.Key, b.N, b.Resolved, b.WinRate*100, b.AvgModelP*100, b.Brier, b.TheoreticalPnL)
+	}
+	fmt.Println("--- 按剩余时间 ---")
+	for _, b := range rep.ByTau {
+		fmt.Printf("  %-8s N=%-4d 已结算=%-4d 胜率=%5.1f%% 模型=%5.1f%% Brier=%.4f 理论1股=%+.2f\n",
+			b.Key, b.N, b.Resolved, b.WinRate*100, b.AvgModelP*100, b.Brier, b.TheoreticalPnL)
+	}
+	r := rep.Replay
+	fmt.Printf("--- 盘口回放（延迟 %dms，%s $%.0f）---\n", cfg.DelayMs, cfg.Sizing, cfg.OrderUSD)
+	fmt.Printf("  成交 %d 笔（胜 %d / 负 %d，胜率 %.1f%%），跳过：心跳超时 %d / 无盘口 %d / 风控 %d / 无法成交 %d\n",
+		r.Executed, r.Wins, r.Losses, r.WinRate*100, r.SkippedStale, r.SkippedNoBook, r.SkippedRisk, r.SkippedNoFill)
+	fmt.Printf("  净盈亏 %+.2f（期末权益 $%.2f），成交额 $%.2f，手续费 $%.2f，ROI %+.2f%%，最大回撤 %.2f%%，均滑点 %+.2f¢，聚类夏普 %.2f\n",
+		r.NetPnL, r.FinalEquity, r.TotalGross, r.TotalFees, r.ROIOnVolume*100, r.MaxDD*100, r.AvgSlippage*100, r.ClusterSharpe)
 	return nil
 }
 

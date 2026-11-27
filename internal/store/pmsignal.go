@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
+
+	ds "market-thermometer/internal/datasource"
 )
 
 // 策略信号（影子模式：只记录、不下单）与短期涨跌盘起始价查询。
@@ -82,6 +85,60 @@ func (s *Store) PMSignals(ctx context.Context, since int64, limit int) ([]PMSign
 		if err := rows.Scan(&x.ID, &x.T, &x.Strategy, &x.Slug, &x.Cond, &x.Outcome, &x.P, &x.Ask, &x.AskSize, &x.FeeRate, &x.Edge, &x.K, &x.KSrc,
 			&x.SdBp, &x.Tau, &x.Spot, &x.Basis, &x.Winner); err != nil {
 			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// PMSignalEvalRow 是用于信号评估与历史盘口回放的完整信号记录（含市场元数据与结算结果）。
+type PMSignalEvalRow struct {
+	PMSignal
+	Series  string
+	Token0  string // 第一个结果代币（Up / Yes），用于查本地盘口
+	EndT    int64  // Unix 秒
+	FeeExp  float64
+	MinSize float64
+}
+
+// PMSignalsForEval 按时间升序读取 [from, to]（Unix 毫秒，0 不限）内的信号及对应市场元数据（最多 limit 条）。
+func (s *Store) PMSignalsForEval(ctx context.Context, from, to int64, limit int) ([]PMSignalEvalRow, error) {
+	if to == 0 {
+		to = 1 << 62
+	}
+	if limit <= 0 || limit > 50_000 {
+		limit = 20_000
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT g.id,g.t,g.strategy,g.slug,g.cond,g.outcome,g.p,g.ask,g.ask_size,g.fee_rate,g.edge,g.k,g.k_src,g.sd_bp,g.tau,g.spot,g.basis,
+		COALESCE(m.winner,-1), COALESCE(e.series,''), COALESCE(m.end_t,0), COALESCE(m.data,'')
+		FROM pm_signal g
+		LEFT JOIN pm_market m ON m.condition_id=g.cond
+		LEFT JOIN pm_event e ON e.id=m.event_id
+		WHERE g.t>=? AND g.t<=?
+		ORDER BY g.t ASC, g.id ASC LIMIT ?`, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PMSignalEvalRow{}
+	for rows.Next() {
+		var x PMSignalEvalRow
+		var mJSON string
+		if err := rows.Scan(&x.ID, &x.T, &x.Strategy, &x.Slug, &x.Cond, &x.Outcome, &x.P, &x.Ask, &x.AskSize, &x.FeeRate, &x.Edge, &x.K, &x.KSrc,
+			&x.SdBp, &x.Tau, &x.Spot, &x.Basis, &x.Winner, &x.Series, &x.EndT, &mJSON); err != nil {
+			return nil, err
+		}
+		if mJSON != "" {
+			var m ds.PMMarket
+			if json.Unmarshal([]byte(mJSON), &m) == nil {
+				if len(m.Tokens) > 0 {
+					x.Token0 = m.Tokens[0]
+				}
+				x.FeeExp, x.MinSize = m.FeeExp, m.MinSize
+				if x.FeeRate == 0 && m.FeeRate > 0 {
+					x.FeeRate = m.FeeRate
+				}
+			}
 		}
 		out = append(out, x)
 	}

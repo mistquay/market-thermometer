@@ -162,8 +162,19 @@ func (s *Server) analyzePortfolio(w http.ResponseWriter, r *http.Request) {
 		}
 		start = q
 	}
+	rebalance := r.URL.Query().Get("rebalance")
+	switch rebalance {
+	case "", "none", "monthly", "quarterly", "yearly", "threshold":
+	default:
+		writeErr(w, http.StatusBadRequest, "再平衡模式须为 none / monthly / quarterly / yearly / threshold")
+		return
+	}
+	dca, _ := strconv.ParseFloat(r.URL.Query().Get("dca"), 64)
+	if dca < 0 || dca > 1e8 {
+		dca = 0
+	}
 	began := time.Now()
-	out, err := job.AnalyzePortfolio(r.Context(), s.store, s.hub, market.CN, p, start)
+	out, err := job.AnalyzePortfolio(r.Context(), s.store, s.hub, market.CN, p, start, rebalance, dca)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

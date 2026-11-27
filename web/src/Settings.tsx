@@ -1,19 +1,43 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Bell, Plus, Send, Trash2 } from 'lucide-react'
-import { api, ApiError, type NotifyChannel, type NotifyKind, type NotifyState } from './api'
+import { Bell, Clock, FileCheck2, Plus, Send, Trash2 } from 'lucide-react'
+import { api, ApiError, type AuditEntry, type NotifyChannel, type NotifyKind, type NotifyState } from './api'
 
 type Draft = { id: number; kind: string; name: string; config: Record<string, string>; masked: Record<string, string>; enabled: boolean }
 
+const ACTION_LABEL: Record<string, string> = {
+  'pm.halt': 'PM 全局熔断',
+  'pm.order': 'PM 下单',
+  'pm.account.params': 'PM 账户风控',
+  'params.save': '温度计参数',
+  'sim.order': 'A 股模拟委托',
+  'notify.settings': '推送与调度设置',
+  'notify.channel': '推送渠道变更',
+  'plugin.config': '插件配置',
+}
+
 export default function Settings() {
   const [state, setState] = useState<NotifyState | null>(null)
+  const [audits, setAudits] = useState<AuditEntry[]>([])
+  const [auditFilter, setAuditFilter] = useState('')
+  const [schedStart, setSchedStart] = useState('17:30')
+  const [schedDeadline, setSchedDeadline] = useState('22:00')
+  const [schedMsg, setSchedMsg] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [tests, setTests] = useState<Record<number, { busy: boolean; error?: string; ok?: boolean }>>({})
   const [error, setError] = useState('')
 
   const load = useCallback(() => {
-    api.notify().then(setState, (e) => setError(e.message))
+    api.notify().then((s) => {
+      setState(s)
+      setSchedStart(s.scheduleStart || '17:30')
+      setSchedDeadline(s.scheduleDeadline || '22:00')
+    }, (e) => setError(e.message))
   }, [])
+  const loadAudits = useCallback(() => {
+    api.audits(auditFilter, 100).then(setAudits, () => {})
+  }, [auditFilter])
   useEffect(load, [load])
+  useEffect(loadAudits, [loadAudits])
 
   async function run(f: () => Promise<unknown>) {
     setError('')
@@ -60,10 +84,18 @@ export default function Settings() {
       setTests((t) => ({ ...t, [c.id]: { busy: false, error: e instanceof Error ? e.message : String(e) } }))
     }
   }
-  const toggle = (body: { signals?: boolean; weekly?: boolean }) =>
+  const toggle = (body: { signals?: boolean; weekly?: boolean; opsAlerts?: boolean }) =>
     run(async () => {
       if (body.signals && !confirm('开启后，每个交易日收盘后的强提醒事件（武装、底部 / 顶部信号、估值档切换）会推送到已启用的渠道。\n\n当前参数的回测尚未在样本外跑赢估值档基线，推送内容只是指标描述。确定开启？')) return
       setState(await api.saveNotifySettings(body))
+      loadAudits()
+    })
+  const saveSchedule = () =>
+    run(async () => {
+      setSchedMsg('')
+      setState(await api.saveNotifySettings({ scheduleStart: schedStart, scheduleDeadline: schedDeadline }))
+      setSchedMsg('已保存调度窗口')
+      loadAudits()
     })
 
   const editingKind = draft ? kindOf(draft.kind) : undefined
@@ -115,6 +147,40 @@ export default function Settings() {
               onChange={(e) => toggle({ weekly: e.target.checked })}
             />
           </label>
+          <label className="flex cursor-pointer items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-[var(--bg-subtle)]">
+            <div>
+              <div className="text-sm font-medium text-[var(--ink)]">系统运维告警</div>
+              <div className="mt-0.5 text-xs text-[var(--ink-2)]">
+                盘口采集连续失败中断/恢复、A 股每日同步截止仍失败、Polymarket 全局熔断切换时立即推送（30 分钟内同类去重）
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-[var(--accent)]"
+              checked={state.opsAlerts}
+              onChange={(e) => toggle({ opsAlerts: e.target.checked })}
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="panel-head border-b border-[var(--line)]">
+          <Clock className="h-4 w-4 text-[var(--accent)]" />
+          <strong>A 股每日调度窗口</strong>
+          <span className="muted">北京时间工作日自动同步并重试，修改后立即生效</span>
+        </div>
+        <div className="flex flex-wrap items-end gap-4 px-5 py-4">
+          <label className="field">
+            <span>开始时间（HH:MM）</span>
+            <input className="mono" value={schedStart} onChange={(e) => setSchedStart(e.target.value)} placeholder="17:30" />
+          </label>
+          <label className="field">
+            <span>截止时间（HH:MM）</span>
+            <input className="mono" value={schedDeadline} onChange={(e) => setSchedDeadline(e.target.value)} placeholder="22:00" />
+          </label>
+          <button className="btn btn-primary" onClick={saveSchedule}>保存时间</button>
+          {schedMsg && <span className="ok-text small">{schedMsg}</span>}
         </div>
       </section>
 
@@ -215,6 +281,45 @@ export default function Settings() {
               ))}
             </tbody>
           </table>
+        )}
+      </section>
+      <section className="panel">
+        <div className="panel-head">
+          <FileCheck2 className="h-4 w-4 text-[var(--accent)]" />
+          <strong>审计日志</strong>
+          <span className="muted">只追加不删改，记录参数生效、熔断、委托、推送与插件配置变更</span>
+          <select
+            style={{ marginLeft: 'auto' }}
+            className="h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2 text-xs text-[var(--ink)]"
+            value={auditFilter}
+            onChange={(e) => setAuditFilter(e.target.value)}
+          >
+            <option value="">全部操作</option>
+            <option value="pm">Polymarket（pm.*）</option>
+            <option value="params">温度计参数</option>
+            <option value="sim">A 股模拟盘</option>
+            <option value="notify">推送与调度</option>
+            <option value="plugin">插件配置</option>
+          </select>
+        </div>
+        {audits.length === 0 ? (
+          <div className="empty">暂无审计记录。</div>
+        ) : (
+          <div className="scroll-y">
+            <table className="table static">
+              <thead><tr><th>时间</th><th>操作</th><th>对象</th><th>详情</th></tr></thead>
+              <tbody>
+                {audits.map((a) => (
+                  <tr key={a.id}>
+                    <td className="mono nowrap small">{new Date(a.at).toLocaleString('zh-CN', { hour12: false })}</td>
+                    <td><span className="tag tag-muted">{ACTION_LABEL[a.action] ?? a.action}</span></td>
+                    <td className="mono small">{a.target || '—'}</td>
+                    <td className="mono muted small">{JSON.stringify(a.detail)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>

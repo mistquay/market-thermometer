@@ -83,6 +83,47 @@ export default function Quality() {
 
       {rep && (
         <>
+          {rep.pmTick && rep.pmTick.length > 0 && (
+            <section className="panel">
+              <div className="panel-head">
+                <strong>高频盘口/现货采集连续性（近 24 小时）</strong>
+                <span className="muted">存放在独立高频快照库（*-tick.db），用于观测写库争用与断流空档</span>
+              </div>
+              <table className="table static">
+                <thead>
+                  <tr>
+                    <th>品种</th>
+                    <th className="num">样本数</th>
+                    <th className="num">P50 间隔</th>
+                    <th className="num">P95 间隔</th>
+                    <th className="num">P99 间隔</th>
+                    <th className="num">最大空档</th>
+                    <th className="num">&gt;10s 空档次数</th>
+                    <th className="num">连续率</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rep.pmTick.map((t) => (
+                    <tr key={t.symbol}>
+                      <td className="mono font-medium">{t.symbol}</td>
+                      <td className="num mono">{t.samples.toLocaleString('zh-CN')}</td>
+                      <td className="num mono">{(t.p50Ms / 1000).toFixed(2)}s</td>
+                      <td className="num mono">{(t.p95Ms / 1000).toFixed(2)}s</td>
+                      <td className="num mono">{(t.p99Ms / 1000).toFixed(2)}s</td>
+                      <td className={`num mono ${t.maxGapMs > 60000 ? 'bad-text' : ''}`}>{(t.maxGapMs / 1000).toFixed(1)}s</td>
+                      <td className={`num mono ${t.gapsOver10s > 0 ? 'warn-text' : ''}`}>{t.gapsOver10s}</td>
+                      <td className="num mono">
+                        <span className={`tag ${t.uptimeRatio >= 0.99 ? 'tag-ok' : t.uptimeRatio >= 0.95 ? 'tag-warn' : 'tag-bad'}`}>
+                          {(t.uptimeRatio * 100).toFixed(2)}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
           <section className="panel">
             <div className="panel-head"><strong>新鲜度</strong><span className="muted">应有日期 = 最新交易日向前推发布时滞（两融等 T+1）</span></div>
             <table className="table static">

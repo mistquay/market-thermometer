@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -48,78 +49,156 @@ CREATE TABLE IF NOT EXISTS web_session (
 );
 `
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db       *sql.DB
+	tickDB   *sql.DB // 高频盘口/现货快照独立库（与主库分离，避免 A 股长同步阻塞盘口采集及膨胀主库备份）
+	path     string
+	tickPath string
+}
 
-// Open 打开（必要时创建）数据库并执行建表。
+// DefaultTickPath 由主库路径推导高频快照库路径（如 data/mt.db → data/mt-tick.db）。
+func DefaultTickPath(path string) string {
+	if path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
+		return ":memory:"
+	}
+	if strings.HasSuffix(strings.ToLower(path), ".db") {
+		return path[:len(path)-3] + "-tick.db"
+	}
+	return path + "-tick.db"
+}
+
+// Open 打开（必要时创建）数据库并执行建表；高频盘口快照库自动使用 DefaultTickPath。
 func Open(path string) (*Store, error) {
-	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	return OpenWithTick(path, "")
+}
+
+// OpenWithTick 打开主库与独立的高频快照库（tickPath 为空时自动推导）。
+func OpenWithTick(path, tickPath string) (*Store, error) {
+	if tickPath == "" {
+		tickPath = DefaultTickPath(path)
+	}
+	openDB := func(p string, pragmas string) (*sql.DB, error) {
+		if p != ":memory:" && !strings.HasPrefix(p, "file::memory:") {
+			if dir := filepath.Dir(p); dir != "." {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return nil, err
+				}
+			}
+			p = "file:" + filepath.ToSlash(p) + "?" + pragmas
+		}
+		db, err := sql.Open("sqlite", p)
+		if err != nil {
 			return nil, err
 		}
+		db.SetMaxOpenConns(1) // SQLite 单写者
+		return db, nil
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+
-		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	db, err := openDB(path, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // SQLite 单写者；本项目的读写量用一个连接足够
-	st := &Store{db: db}
-	if _, err := db.Exec(schema); err != nil {
+	tickDB, err := openDB(tickPath, "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
+	if err != nil {
 		db.Close()
+		return nil, fmt.Errorf("open tick db: %w", err)
+	}
+	st := &Store{db: db, tickDB: tickDB, path: path, tickPath: tickPath}
+	closeAll := func() {
+		tickDB.Close()
+		db.Close()
+	}
+	if _, err := db.Exec(schema); err != nil {
+		closeAll()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	if err := st.migrateScores(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate scores: %w", err)
 	}
 	if err := st.migrateBreadth(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate breadth: %w", err)
 	}
 	if err := st.migrateFunds(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate funds: %w", err)
 	}
 	if err := st.migrateNotify(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate notify: %w", err)
 	}
 	if err := st.migrateSecurities(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate securities: %w", err)
 	}
 	if err := st.migratePortfolio(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate portfolio: %w", err)
 	}
 	if err := st.migrateExt(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate ext: %w", err)
 	}
 	if err := st.migrateSim(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate sim: %w", err)
 	}
 	if err := st.migrateCrypto(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate crypto: %w", err)
 	}
 	if err := st.migratePM(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate polymarket: %w", err)
 	}
 	if err := st.migratePMSim(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate pm sim: %w", err)
 	}
 	if err := st.migratePMSignal(); err != nil {
-		db.Close()
+		closeAll()
 		return nil, fmt.Errorf("migrate pm signal: %w", err)
+	}
+	if err := st.migrateAudit(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate audit: %w", err)
+	}
+	if err := st.migratePMProposal(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate pm proposal: %w", err)
+	}
+	if err := st.migrateNotes(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate notes: %w", err)
+	}
+	if err := st.migrateLegacyPMBookToTick(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate pm tick split: %w", err)
 	}
 	return st, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	var e1, e2 error
+	if s.tickDB != nil {
+		e1 = s.tickDB.Close()
+	}
+	if s.db != nil {
+		e2 = s.db.Close()
+	}
+	return errors.Join(e1, e2)
+}
+
+// Ping 检查主库与高频快照库的连通性。
+func (s *Store) Ping(ctx context.Context) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return err
+	}
+	return s.tickDB.PingContext(ctx)
+}
+
+// Paths 返回主库与高频快照库路径（用于运维展示）。
+func (s *Store) Paths() (mainPath, tickPath string) { return s.path, s.tickPath }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 

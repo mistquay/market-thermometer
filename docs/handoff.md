@@ -50,6 +50,11 @@
   - 2026-11-26 晚：二元结果模拟盘（手动下单）、短期涨跌盘公允概率模型与影子模式（只记录信号）已完成，见 docs/polymarket.md §7、§8。
   - **常驻服务**：用户授权自行运行与调试。`mt serve` 以隐藏窗口在本机常驻（8080），日志在 `data/logs/serve.log`（不轮转）。停止：`Stop-Process -Name mt`；更新：先停、`go build -o mt.exe ./cmd/mt`、再 `Start-Process`（命令见本会话记录或 deploy.md）。每次重启盘口采集有约 15 秒空档。开发自测用 `mt-dev.exe serve -schedule=false -c data/scratch/config.yaml`（8091），不要再起第二个写库进程。
   - 下一步：攒几天盘口与信号 → 评估信号与回放 → 按用户逐级放权接模拟盘自动下单 → 海外服务器实盘插件。
+- **2026-11-27 迭代完成**：
+  - 高频盘口/现货拆分独立库 `data/mt-tick.db`（已自动迁移 88,212 条盘口 + 20,880 条现货，释放主库写锁争用）；新增 `/healthz`、`mt serve -log` 轮转、审计日志 `audit_log`、运维告警开关、Web 可调 A 股调度窗口、数据质量页 24h 高频采集连续性。
+  - 新增 Polymarket 信号评估与历史盘口回放引擎（`internal/pmeval`、`mt pmeval`、预测页「信号评估与回放」Tab）；首批 228 市场实测表明 `updown-fair` 存在过自信（模型 52.8% vs 实际 45.0%），回放负收益，继续保持影子模式。
+  - 新增零依赖 WebSocket 实时推送（`polymarket.book.ws: true`）、二元/互斥多结果套利扫描器（`internal/pmarb`）、分数凯利仓位与单资产跨周期敞口风控（`MaxAssetUSD`）、策略分级执行与人工审批提案队列（HITL）、核心外部进程 Broker 适配（`internal/plugin/ext/broker.go`）。
+  - 新增纯本地 A 股选股器（`#/screener`）、组合再平衡（月/季/年/阈值）与定投模拟、回测交易成本（`costBps`）、可绑定任意标的/组合/事件的研究笔记（`research_note`）。
 - 用户 2026-11-25 说明：快速开发阶段功能优先，非必要的测试与决策自行处理，只有必须确认的才停下来问。跳过的验证记在下面的清单里，全部开发完后统一验证。
 
 ### 待统一验证清单

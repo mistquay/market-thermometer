@@ -45,15 +45,16 @@ type StockGap struct {
 
 // QualityReport 是数据质量页的内容。
 type QualityReport struct {
-	CalendarLast string             `json:"calendarLast"`
-	Freshness    []Freshness        `json:"freshness"`
-	Coverage     []quality.DayCount `json:"coverage"`
-	WindowFrom   string             `json:"windowFrom"`
-	GapStocks    int                `json:"gapStocks"`  // 有缺口的股票数
-	GapDays      int                `json:"gapDays"`    // 缺失的股票·交易日总数
-	Gaps         []StockGap         `json:"gaps"`       // 缺失最多的前 1000 只
-	CrossCheck   *CrossCheckResult  `json:"crossCheck"` // 最近一次交叉核对
-	ElapsedMs    int64              `json:"elapsedMs"`
+	CalendarLast string               `json:"calendarLast"`
+	Freshness    []Freshness          `json:"freshness"`
+	Coverage     []quality.DayCount   `json:"coverage"`
+	WindowFrom   string               `json:"windowFrom"`
+	GapStocks    int                  `json:"gapStocks"`  // 有缺口的股票数
+	GapDays      int                  `json:"gapDays"`    // 缺失的股票·交易日总数
+	Gaps         []StockGap           `json:"gaps"`       // 缺失最多的前 1000 只
+	CrossCheck   *CrossCheckResult    `json:"crossCheck"` // 最近一次交叉核对
+	PMTick       []store.PMTickHealth `json:"pmTick"`     // 近 24 小时高频盘口/现货采集连续性
+	ElapsedMs    int64                `json:"elapsedMs"`
 }
 
 // Quality 生成数据质量报告（约 1–3 秒：一次扫描近一年的个股日线日期）。
@@ -147,6 +148,12 @@ func Quality(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Marke
 		return nil, err
 	} else if ok {
 		rep.CrossCheck = &cc
+	}
+	since24h := now.Add(-24 * time.Hour).UnixMilli()
+	for _, sym := range []string{"BTCUSDT", "ETHUSDT"} {
+		if h, err := st.PMTickHealthStats(ctx, sym, since24h); err == nil && h.Samples > 0 {
+			rep.PMTick = append(rep.PMTick, h)
+		}
 	}
 	rep.ElapsedMs = time.Since(began).Milliseconds()
 	return rep, nil

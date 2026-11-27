@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowLeft, ExternalLink, Layers, Radio, RefreshCw, Search, Star, Wallet, X } from 'lucide-react'
+import { Activity, ArrowLeft, ExternalLink, FlaskConical, Layers, Radio, RefreshCw, Scale, Search, Star, Wallet, X } from 'lucide-react'
 import { api, type Book, type BookSnap, type PMAccountView, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { useTheme } from './theme'
 import { AccountPage, OrderTicket, ShadowPanel, SimPanel } from './PMSim'
+import { EvalPanel } from './PMEval'
+import { ArbAndQueuePanel } from './PMArbQueue'
+import { NotesBox } from './NotesBox'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 function when(iso: string | number) {
@@ -16,7 +19,7 @@ const cents = (p: number) => `${(p * 100).toFixed(1)}¢`
 const secs = (iso: string) => Math.floor(new Date(iso).getTime() / 1000)
 const slugFromHash = () => decodeURIComponent(location.hash.replace(/^#\/?predict\/?/, '').split('/')[0] ?? '')
 
-type HomeTab = 'markets' | 'shadow' | 'sim'
+type HomeTab = 'markets' | 'shadow' | 'eval' | 'arb' | 'sim'
 
 function Outcome({ m }: { m: PMMarket }) {
   if (m.winner >= 0) return <span className={m.winner === 0 ? 'tag tag-hot' : 'tag tag-cold'}>{m.outcomes[m.winner]}</span>
@@ -222,7 +225,9 @@ function Home() {
             </div>
             <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
               {book?.configured
-                ? `每 ${book.status.every} · ${book.status.targets.length} 目标 · ${book.stats.spots.toLocaleString()} 现货`
+                ? `每 ${book.status.every} · ${book.status.targets.length} 目标 · ${book.stats.spots.toLocaleString()} 现货${
+                    book.status.wsEnabled ? ` · WS ${book.status.wsSpotOk && book.status.wsBookOk ? '已连' : '回退REST'}` : ''
+                  }`
                 : '配置 polymarket.book 启用'}
             </div>
           </div>
@@ -315,6 +320,26 @@ function Home() {
             <span className="tag tag-cold">{activeEvals} 进行中</span>
           </button>
         )}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'eval'}
+          className={`tab-btn ${tab === 'eval' ? 'on' : ''}`}
+          onClick={() => setTab('eval')}
+        >
+          <FlaskConical className="h-4 w-4" />
+          信号评估与回放
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'arb'}
+          className={`tab-btn ${tab === 'arb' ? 'on' : ''}`}
+          onClick={() => setTab('arb')}
+        >
+          <Scale className="h-4 w-4" />
+          套利与人工审批
+        </button>
         <button
           type="button"
           role="tab"
@@ -473,7 +498,13 @@ function Home() {
       {/* Tab 2: 影子策略 */}
       {state?.configured && tab === 'shadow' && shadow && <ShadowPanel s={shadow} />}
 
-      {/* Tab 3: 模拟盘与风控 */}
+      {/* Tab 3: 信号评估与回放 */}
+      {state?.configured && tab === 'eval' && <EvalPanel seriesList={state.series} />}
+
+      {/* Tab 4: 套利与审批 */}
+      {state?.configured && tab === 'arb' && <ArbAndQueuePanel accounts={simSummary?.accounts ?? []} />}
+
+      {/* Tab 5: 模拟盘与风控 */}
       {state?.configured && tab === 'sim' && <SimPanel />}
     </div>
   )
@@ -850,6 +881,8 @@ function EventDetail({ slug }: { slug: string }) {
           </section>
         </div>
       )}
+
+      {ev && <NotesBox target={`pm:${ev.slug}`} label={ev.title} />}
     </div>
   )
 }

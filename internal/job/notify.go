@@ -16,7 +16,7 @@ import (
 	"market-thermometer/internal/store"
 )
 
-// 推送设置项（存 meta 表）。两个开关默认关闭。
+// 推送设置项（存 meta 表）。默认关闭。
 const (
 	// SettingSignals：实盘信号推送总开关（"on" 为开）。
 	SettingSignals = "notify.signals"
@@ -24,6 +24,11 @@ const (
 	SettingSignalsSince = "notify.signals_since"
 	// SettingWeekly：周报开关（"on" 为开），与信号开关独立。
 	SettingWeekly = "notify.weekly"
+	// SettingOpsAlerts：运维告警开关（"on" 为开），盘口采集中断、同步失败、熔断等异常立即推送。
+	SettingOpsAlerts = "notify.ops"
+	// SettingScheduleStart / SettingScheduleDeadline：A 股每日调度窗口（北京时间 HH:MM，默认 17:30 / 22:00）。
+	SettingScheduleStart    = "schedule.start"
+	SettingScheduleDeadline = "schedule.deadline"
 )
 
 // pushEvents 是需要推送的强提醒事件（设计文档 §7）。
@@ -50,6 +55,45 @@ type ChannelResult struct {
 	Name  string `json:"name"`
 	Kind  string `json:"kind"`
 	Error string `json:"error,omitempty"`
+}
+
+// SendAlert 发送一条运维告警（受 SettingOpsAlerts 开关控制，按 key + 时间槽去重避免刷屏）。
+func (p *Pusher) SendAlert(ctx context.Context, key, title string, lines []string) {
+	if p == nil {
+		return
+	}
+	on, err := p.on(ctx, SettingOpsAlerts)
+	if err != nil || !on {
+		return
+	}
+	chs, err := p.enabledChannels(ctx)
+	if err != nil || len(chs) == 0 {
+		return
+	}
+	now := p.now()
+	// 同一告警键在 30 分钟时间窗口内只发一次
+	slot := now.Unix() / 1800
+	dedupeKey := fmt.Sprintf("alert:%s:%d", key, slot)
+	if sent, err := p.store.NotifySent(ctx, dedupeKey); err != nil || sent {
+		return
+	}
+	msg := notify.Message{
+		Title: title,
+		Lines: append(append([]string(nil), lines...), "时间："+now.In(ds.Shanghai).Format("2006-01-02 15:04:05")),
+	}
+	results := p.SendTo(ctx, chs, msg)
+	ok, summary := 0, make([]string, 0, len(results))
+	for _, r := range results {
+		if r.Error == "" {
+			ok++
+			summary = append(summary, r.Name+"：成功")
+		} else {
+			summary = append(summary, r.Name+"："+r.Error)
+		}
+	}
+	if ok > 0 {
+		_ = p.store.LogNotify(ctx, store.NotifyLog{Key: dedupeKey, Title: msg.Title, Result: strings.Join(summary, "；")}, now)
+	}
 }
 
 // SendTo 向指定渠道发送消息（不检查开关、不去重；测试发送也用它）。

@@ -9,8 +9,12 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/job"
+	"market-thermometer/internal/pmarb"
+	"market-thermometer/internal/pmeval"
 	"market-thermometer/internal/store"
 )
 
@@ -78,6 +82,118 @@ func (s *Server) pmState(w http.ResponseWriter, r *http.Request) {
 		out["shadow"] = s.opt.PMShadow.Status()
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// pmArb 实时扫描当前系列进行中市场与关注事件的二元（Up+Down）及互斥多结果（NegRisk）扣费套利机会。
+func (s *Server) pmArb(w http.ResponseWriter, r *http.Request) {
+	if !s.pmReady(w) {
+		return
+	}
+	shares, _ := strconv.ParseFloat(r.URL.Query().Get("shares"), 64)
+	if shares <= 0 || shares > 10000 {
+		shares = 50
+	}
+	ctx := r.Context()
+	now := s.now().Unix()
+	open := false
+	seenSlug := map[string]bool{}
+	var events []ds.PMEvent
+	// 1. 各配置系列当前未结束的 2 个市场
+	for _, ser := range s.opt.PM.Series() {
+		evs, err := s.store.PMEvents(ctx, store.PMEventQuery{Series: ser, Closed: &open, From: now, Asc: true, Limit: 2})
+		if err != nil {
+			continue
+		}
+		for _, e := range evs {
+			if !seenSlug[e.Slug] {
+				seenSlug[e.Slug] = true
+				events = append(events, e)
+			}
+		}
+	}
+	// 2. 关注的事件
+	if watched, err := s.store.PMWatched(ctx); err == nil {
+		for _, slug := range watched {
+			if seenSlug[slug] {
+				continue
+			}
+			if e, err := s.store.PMEventBySlug(ctx, slug); err == nil && !e.Closed {
+				seenSlug[slug] = true
+				events = append(events, e)
+			}
+		}
+	}
+	// 批量拉取所有涉及的第一个结果代币订单簿
+	tokSet := map[string]bool{}
+	var tokens []string
+	for _, e := range events {
+		for _, m := range e.Markets {
+			if !m.Closed && len(m.Tokens) > 0 && !tokSet[m.Tokens[0]] {
+				tokSet[m.Tokens[0]] = true
+				tokens = append(tokens, m.Tokens[0])
+			}
+		}
+	}
+	bookMap := map[string]ds.Book{}
+	for i := 0; i < len(tokens); i += 50 {
+		batch := tokens[i:min(i+50, len(tokens))]
+		bs, err := s.opt.PM.Source().Books(ctx, batch)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "拉取订单簿失败："+err.Error())
+			return
+		}
+		for _, b := range bs {
+			bookMap[b.Token] = b
+		}
+	}
+	opps := []pmarb.Opportunity{}
+	for _, e := range events {
+		if e.NegRisk && len(e.Markets) >= 2 {
+			if opp, ok := pmarb.ScanNegRisk(e, bookMap, shares); ok {
+				opps = append(opps, opp)
+			}
+			continue
+		}
+		for _, m := range e.Markets {
+			if len(m.Tokens) >= 2 {
+				if b, ok := bookMap[m.Tokens[0]]; ok {
+					if opp, ok := pmarb.ScanBinary(e, m, b, shares); ok {
+						opps = append(opps, opp)
+					}
+				}
+			}
+		}
+	}
+	pmarb.SortOpportunities(opps)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scannedEvents": len(events),
+		"scannedTokens": len(tokens),
+		"targetShares":  shares,
+		"at":            s.now(),
+		"opportunities": opps,
+	})
+}
+
+// pmEval 对本地影子信号执行分层评估与历史盘口快照回放。
+func (s *Server) pmEval(w http.ResponseWriter, r *http.Request) {
+	req := struct {
+		Days int `json:"days"`
+		pmeval.Config
+	}{Days: 14, Config: pmeval.DefaultConfig()}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	var fromMs int64
+	if req.Days > 0 {
+		fromMs = s.now().AddDate(0, 0, -req.Days).UnixMilli()
+	}
+	began := time.Now()
+	rep, err := job.EvaluatePMSignals(r.Context(), s.store, fromMs, 0, req.Config)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"report": rep, "elapsedMs": time.Since(began).Milliseconds()})
 }
 
 // pmSignals 返回最近的策略信号（带市场结果），since 为 Unix 毫秒，最多 500 条。

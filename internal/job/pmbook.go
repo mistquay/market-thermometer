@@ -30,6 +30,9 @@ type PMBookCollector struct {
 	logf   func(string, ...any)
 
 	onTick       []TickFunc
+	onAlert      func(ctx context.Context, key, title string, lines []string)
+	alerted      bool
+	wsFeed       *PMWSFeed
 	refreshEvery time.Duration // 目标市场列表多久从本地库刷新一次
 	lastHash     map[string]string
 	keys         map[string]int64
@@ -78,9 +81,20 @@ func NewPMBookCollector(st *store.Store, src ds.PredictionSource, series []strin
 // OnTick 注册每轮采集后的回调（如策略影子模式）。在采集 goroutine 里同步调用，回调应尽快返回。
 func (c *PMBookCollector) OnTick(f TickFunc) { c.onTick = append(c.onTick, f) }
 
+// OnAlert 注册连续采集失败告警回调（连续失败达到 10 次触发，恢复后发恢复通知）。
+func (c *PMBookCollector) OnAlert(f func(ctx context.Context, key, title string, lines []string)) {
+	c.onAlert = f
+}
+
 // WithSpot 设置现货价来源（如加密行情同步器的 Price）。
 func (c *PMBookCollector) WithSpot(f func(ctx context.Context, symbol string) (float64, string, error)) *PMBookCollector {
 	c.spot = f
+	return c
+}
+
+// WithWS 启用 WebSocket 实时推送源（断线自动回退 REST）。
+func (c *PMBookCollector) WithWS(feed *PMWSFeed) *PMBookCollector {
+	c.wsFeed = feed
 	return c
 }
 
@@ -101,6 +115,9 @@ func (c *PMBookCollector) Run(ctx context.Context) {
 	c.mu.Lock()
 	c.running = true
 	c.mu.Unlock()
+	if c.wsFeed != nil {
+		c.wsFeed.Run(ctx)
+	}
 	defer func() {
 		c.mu.Lock()
 		c.running = false
@@ -158,9 +175,18 @@ func (c *PMBookCollector) fail(err error) {
 	c.errs++
 	c.lastErr, c.errAt = err.Error(), c.now()
 	n := c.errs
+	needAlert := n >= 10 && !c.alerted
+	if needAlert {
+		c.alerted = true
+	}
 	c.mu.Unlock()
 	if n == 1 || n%100 == 0 {
 		c.logf("盘口采集：%v（连续 %d 次）", err, n)
+	}
+	if needAlert && c.onAlert != nil {
+		go c.onAlert(context.Background(), "pmbook-down", "⚠【运维告警 · Polymarket 盘口采集中断】", []string{
+			fmt.Sprintf("连续失败 %d 次，最近错误：%v", n, err),
+		})
 	}
 }
 
@@ -196,6 +222,21 @@ func (c *PMBookCollector) refreshTargets(ctx context.Context) error {
 	c.mu.Lock()
 	c.targets = out
 	c.mu.Unlock()
+	if c.wsFeed != nil {
+		symSet, tokSet := map[string]bool{}, map[string]bool{}
+		var syms, toks []string
+		for _, t := range out {
+			if t.Symbol != "" && !symSet[t.Symbol] {
+				symSet[t.Symbol] = true
+				syms = append(syms, t.Symbol)
+			}
+			if t.Token != "" && !tokSet[t.Token] {
+				tokSet[t.Token] = true
+				toks = append(toks, t.Token)
+			}
+		}
+		c.wsFeed.SetTargets(syms, toks)
+	}
 	return nil
 }
 
@@ -216,9 +257,23 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 			symbols[t.Symbol] = true
 		}
 	}
-	books, err := c.src.Books(ctx, tokens)
-	if err != nil {
-		return fmt.Errorf("订单簿：%w", err)
+	var books []ds.Book
+	var restTokens []string
+	for _, tok := range tokens {
+		if c.wsFeed != nil {
+			if b, ok := c.wsFeed.FreshBook(tok, now, 10*time.Second); ok {
+				books = append(books, b)
+				continue
+			}
+		}
+		restTokens = append(restTokens, tok)
+	}
+	if len(restTokens) > 0 {
+		rb, err := c.src.Books(ctx, restTokens)
+		if err != nil {
+			return fmt.Errorf("订单簿：%w", err)
+		}
+		books = append(books, rb...)
 	}
 	var rows []store.PMBookRow
 	var hashes [][2]string
@@ -228,6 +283,7 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 		}
 		k, ok := c.keys[b.Token]
 		if !ok {
+			var err error
 			if k, err = c.store.PMBookKey(context.WithoutCancel(ctx), b.Token); err != nil {
 				return err
 			}
@@ -248,6 +304,12 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 		}
 		sort.Strings(names)
 		for _, s := range names {
+			if c.wsFeed != nil {
+				if p, ok := c.wsFeed.FreshSpot(s, now, 8*time.Second); ok {
+					spots = append(spots, store.PMSpot{Symbol: s, T: now.UnixMilli(), P: p})
+					continue
+				}
+			}
 			p, _, err := c.spot(ctx, s)
 			if err != nil {
 				return fmt.Errorf("现货价 %s：%w", s, err)
@@ -265,8 +327,14 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 	c.books += int64(len(rows))
 	c.spots += int64(len(spots))
 	c.ticks++
-	c.lastRun, c.errs = now, 0
+	recovered := c.alerted
+	c.lastRun, c.errs, c.alerted = now, 0, false
 	c.mu.Unlock()
+	if recovered && c.onAlert != nil {
+		go c.onAlert(context.Background(), "pmbook-recovered", "✅【运维通知 · Polymarket 盘口采集已恢复】", []string{
+			fmt.Sprintf("盘口采集已恢复正常，当前监控 %d 个市场。", len(targets)),
+		})
+	}
 	for _, f := range c.onTick {
 		f(ctx, now, targets, books, spots)
 	}
@@ -275,21 +343,29 @@ func (c *PMBookCollector) Tick(ctx context.Context) error {
 
 // PMBookStatus 是采集器状态。
 type PMBookStatus struct {
-	Running bool           `json:"running"`
-	Every   string         `json:"every"`
-	Targets []PMBookTarget `json:"targets"`
-	Ticks   int64          `json:"ticks"`
-	Books   int64          `json:"books"` // 本进程启动以来写入的快照
-	Spots   int64          `json:"spots"`
-	LastRun time.Time      `json:"lastRun,omitzero"`
-	Errors  int            `json:"errors"` // 连续失败次数
-	LastErr string         `json:"lastErr,omitempty"`
-	ErrAt   time.Time      `json:"errAt,omitzero"`
+	Running   bool           `json:"running"`
+	Every     string         `json:"every"`
+	Targets   []PMBookTarget `json:"targets"`
+	Ticks     int64          `json:"ticks"`
+	Books     int64          `json:"books"` // 本进程启动以来写入的快照
+	Spots     int64          `json:"spots"`
+	LastRun   time.Time      `json:"lastRun,omitzero"`
+	Errors    int            `json:"errors"` // 连续失败次数
+	LastErr   string         `json:"lastErr,omitempty"`
+	ErrAt     time.Time      `json:"errAt,omitzero"`
+	WSEnabled bool           `json:"wsEnabled,omitempty"`
+	WSSpotOK  bool           `json:"wsSpotOk,omitempty"`
+	WSBookOK  bool           `json:"wsBookOk,omitempty"`
 }
 
 func (c *PMBookCollector) Status() PMBookStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return PMBookStatus{Running: c.running, Every: c.every.String(), Targets: append([]PMBookTarget{}, c.targets...), Ticks: c.ticks,
+	st := PMBookStatus{Running: c.running, Every: c.every.String(), Targets: append([]PMBookTarget{}, c.targets...), Ticks: c.ticks,
 		Books: c.books, Spots: c.spots, LastRun: c.lastRun, Errors: c.errs, LastErr: c.lastErr, ErrAt: c.errAt}
+	if c.wsFeed != nil {
+		st.WSEnabled = true
+		st.WSSpotOK, st.WSBookOK = c.wsFeed.Status()
+	}
+	return st
 }

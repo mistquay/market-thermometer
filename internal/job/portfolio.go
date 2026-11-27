@@ -12,12 +12,12 @@ import (
 
 // AnalyzePortfolio 读取本地数据分析组合：股票、场内基金用后复权价（由不复权收盘价与除权乘数链式计算），
 // 场外基金用累计净值；交易日历与基准为该市场的标的指数（沪深300）。
-func AnalyzePortfolio(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Market, p store.Portfolio, start string) (portfolio.Output, error) {
+func AnalyzePortfolio(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Market, p store.Portfolio, start string, rebalance string, dca float64) (portfolio.Output, error) {
 	bench, err := loadMetric(ctx, st, hub, mkt.Roles[market.RoleClose])
 	if err != nil {
 		return portfolio.Output{}, err
 	}
-	in := portfolio.Input{Bench: map[string]float64{}, Start: start}
+	in := portfolio.Input{Bench: map[string]float64{}, Start: start, Rebalance: rebalance, DCA: dca}
 	for _, pt := range bench {
 		in.Calendar = append(in.Calendar, pt.Date)
 		in.Bench[pt.Date] = pt.Value

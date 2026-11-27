@@ -10,9 +10,31 @@ import (
 	"time"
 
 	ds "market-thermometer/internal/datasource"
+	"market-thermometer/internal/pmsim"
 	"market-thermometer/internal/pmstrat"
+	"market-thermometer/internal/pmtrade"
 	"market-thermometer/internal/store"
 )
+
+// SettingPMExec 是策略执行配置在 meta 表里的键。
+const SettingPMExec = "pm.exec"
+
+// PMExecConfig 控制影子策略触发信号后的执行方式（默认 shadow 只记信号，安全起见须人工显式切换）。
+type PMExecConfig struct {
+	Mode      string  `json:"mode"`      // shadow | hitl | auto_sim
+	AccountID int64   `json:"accountId"` // 绑定的模拟盘账户 ID（hitl / auto_sim 用）
+	Sizing    string  `json:"sizing"`    // fixed | kelly
+	OrderUSD  float64 `json:"orderUsd"`  // fixed 金额 / kelly 上限（美元）
+	KellyFrac float64 `json:"kellyFrac"` // 分数凯利系数
+	KSrc      string  `json:"kSrc"`      // "" 全部 | exact（仅精确起始价）
+	MinEdge   float64 `json:"minEdge"`   // 触发执行/提案的最小净预期收益
+	TTLSec    int     `json:"ttlSec"`    // HITL 提案有效秒数（默认 90）
+	Notify    bool    `json:"notify"`    // 产生新提案或自动下单时发送运维告警
+}
+
+func DefaultPMExecConfig() PMExecConfig {
+	return PMExecConfig{Mode: "shadow", Sizing: "fixed", OrderUSD: 20, KellyFrac: 0.25, KSrc: "exact", MinEdge: 0.05, TTLSec: 90}
+}
 
 // PMShadow 是短期涨跌盘公允概率策略的影子模式：挂在盘口采集器的每轮回调上，
 // 对进行中的市场算 P(Up)，与盘口（卖一 + 手续费）比较，超过阈值时只记录信号，不下单。
@@ -32,6 +54,10 @@ type PMShadow struct {
 	basisN   map[string]int
 	basisErr map[string]float64 // 资产 → 基差残差的稳健标准差（bp），用作起始价估计误差与结束端换算误差
 	src      ds.PredictionSource
+	broker   pmtrade.Broker
+	pusher   *Pusher
+	execCfg  PMExecConfig
+	execAt   time.Time
 	fetching map[string]bool // 正在补拉起始价的 5m 事件
 	ptbLag   []float64       // 起始价公布延迟（秒，5m 事件结束后多久能取到）
 	basisAt  time.Time
@@ -75,6 +101,37 @@ type PMEval struct {
 func (p *PMShadow) WithSource(src ds.PredictionSource) *PMShadow {
 	p.src = src
 	return p
+}
+
+// WithBroker 注入模拟盘 Broker 与可选推送器，支持 HITL 人工确认队列与 auto_sim 自动模拟盘模式。
+func (p *PMShadow) WithBroker(b pmtrade.Broker, pusher *Pusher) *PMShadow {
+	p.mu.Lock()
+	p.broker, p.pusher = b, pusher
+	p.mu.Unlock()
+	return p
+}
+
+// LoadPMExecConfig 从数据库读取策略执行配置（未配置时返回默认 shadow）。
+func LoadPMExecConfig(ctx context.Context, st *store.Store) PMExecConfig {
+	cfg := DefaultPMExecConfig()
+	if ok, err := st.LoadJSON(ctx, SettingPMExec, &cfg); err == nil && ok {
+		if cfg.Mode == "" {
+			cfg.Mode = "shadow"
+		}
+		if cfg.Sizing == "" {
+			cfg.Sizing = "fixed"
+		}
+		if cfg.OrderUSD <= 0 {
+			cfg.OrderUSD = 20
+		}
+		if cfg.KellyFrac <= 0 {
+			cfg.KellyFrac = 0.25
+		}
+		if cfg.TTLSec <= 0 {
+			cfg.TTLSec = 90
+		}
+	}
+	return cfg
 }
 
 func NewPMShadow(st *store.Store, minEdge float64) *PMShadow {
@@ -180,7 +237,78 @@ func (p *PMShadow) tick(ctx context.Context, now time.Time, targets []PMBookTarg
 		return err
 	}
 	p.signals += int64(len(sigs))
+	if len(sigs) > 0 {
+		if now.Sub(p.execAt) >= 10*time.Second {
+			p.execCfg = LoadPMExecConfig(ctx, p.store)
+			p.execAt = now
+		}
+		cfg := p.execCfg
+		if cfg.Mode == "hitl" || cfg.Mode == "auto_sim" {
+			go p.dispatchExec(context.Background(), cfg, sigs, now)
+		}
+	}
 	return nil
+}
+
+// dispatchExec 在独立 goroutine 中根据执行模式生成 HITL 提案或自动下模拟单，避免阻塞盘口采集循环。
+func (p *PMShadow) dispatchExec(ctx context.Context, cfg PMExecConfig, sigs []store.PMSignal, now time.Time) {
+	p.mu.Lock()
+	broker, pusher := p.broker, p.pusher
+	p.mu.Unlock()
+	equity := 1000.0
+	if broker != nil && cfg.AccountID > 0 {
+		if v, err := broker.Account(ctx, cfg.AccountID); err == nil && v.Equity > 0 {
+			equity = v.Equity
+		}
+	}
+	for _, s := range sigs {
+		if s.Edge < cfg.MinEdge-1e-12 {
+			continue
+		}
+		if cfg.KSrc != "" && s.KSrc != cfg.KSrc {
+			continue
+		}
+		usd := pmstrat.SizeUSD(equity, s.P, s.Ask, s.FeeRate, pmstrat.SizingConfig{
+			Mode: cfg.Sizing, FixedUSD: cfg.OrderUSD, KellyFrac: cfg.KellyFrac, MinUSD: 5,
+		})
+		if usd <= 0 {
+			continue
+		}
+		switch cfg.Mode {
+		case "hitl":
+			prop := store.PMProposal{
+				CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(time.Duration(cfg.TTLSec) * time.Second).UnixMilli(),
+				Strategy: s.Strategy, Slug: s.Slug, Cond: s.Cond, Outcome: s.Outcome,
+				P: s.P, Ask: s.Ask, Edge: s.Edge, SuggestedUSD: usd, KSrc: s.KSrc, Tau: s.Tau, AccountID: cfg.AccountID,
+			}
+			id, err := p.store.AddPMProposal(ctx, prop, now)
+			if err == nil && id > 0 && cfg.Notify && pusher != nil {
+				side := "Up"
+				if s.Outcome == 1 {
+					side = "Down"
+				}
+				pusher.SendAlert(ctx, fmt.Sprintf("pm-prop-%s-%d", s.Cond, s.Outcome), "🔔【Polymarket 待确认提案】"+s.Slug, []string{
+					fmt.Sprintf("方向：%s｜模型 %.1f%% vs 卖一 %.1f¢｜净 Edge +%.1f¢", side, s.P*100, s.Ask*100, s.Edge*100),
+					fmt.Sprintf("建议金额：$%.2f｜剩余 %ds｜起始价来源：%s（%d 秒内可在网页批准）", usd, s.Tau, s.KSrc, cfg.TTLSec),
+				})
+			}
+		case "auto_sim":
+			if broker == nil || cfg.AccountID <= 0 {
+				continue
+			}
+			feeAtAsk := pmsim.Fee{Rate: s.FeeRate}.Of(s.Ask, 1)
+			limit := max(0.01, min(0.99, s.P-feeAtAsk))
+			o, err := broker.Place(ctx, pmtrade.OrderReq{
+				Account: cfg.AccountID, Slug: s.Slug, Cond: s.Cond, Outcome: s.Outcome,
+				Side: pmsim.Buy, Amount: usd, Limit: limit, Source: "strategy:" + s.Strategy,
+			})
+			if err == nil {
+				_ = p.store.AddAudit(ctx, "strategy", "pm.auto_order", s.Slug, map[string]any{
+					"account": cfg.AccountID, "outcome": s.Outcome, "status": o.Status, "shares": o.Fill.Shares, "gross": o.Fill.Gross, "reason": o.Reason,
+				}, now)
+			}
+		}
+	}
 }
 
 func sizeAt(ls []ds.BookLevel) float64 {

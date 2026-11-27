@@ -192,10 +192,10 @@ export function AccountPage({ id }: { id: number }) {
   const settled = positions.filter((x) => x.settled)
   const num = (k: keyof PMSimParams) => (
     <label className="flex items-center gap-2 text-xs text-[var(--ink-2)]">
-      <span>{{ maxOrderUsd: '单笔上限', maxDailyUsd: '单日上限', maxMarketUsd: '单市场上限', halted: '' }[k]}</span>
+      <span>{{ maxOrderUsd: '单笔上限', maxDailyUsd: '单日上限', maxMarketUsd: '单市场上限', maxAssetUsd: '单资产上限', halted: '' }[k]}</span>
       <input
         className={`${inputCls} w-24 mono`}
-        value={String(p[k])}
+        value={String(p[k] ?? 0)}
         onChange={(e) => setP({ ...p, [k]: Number(e.target.value) })}
       />
     </label>
@@ -268,6 +268,7 @@ export function AccountPage({ id }: { id: number }) {
           {num('maxOrderUsd')}
           {num('maxDailyUsd')}
           {num('maxMarketUsd')}
+          {num('maxAssetUsd')}
           <button className="btn btn-primary" onClick={() => save(p)}>
             保存
           </button>

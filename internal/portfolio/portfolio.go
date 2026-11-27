@@ -17,10 +17,23 @@ type Asset struct {
 
 // Input 是一次分析的输入。Calendar 为交易日历（升序，通常是沪深300 有数据的日子）。
 type Input struct {
-	Calendar []string
-	Bench    map[string]float64 // 基准收盘价
-	Assets   []Asset
-	Start    string // 可选：起始日，空为所有持仓都有数据的最早日
+	Calendar  []string
+	Bench     map[string]float64 // 基准收盘价
+	Assets    []Asset
+	Start     string  // 可选：起始日，空为所有持仓都有数据的最早日
+	Rebalance string  // 再平衡频率："" / "none" 不再平衡 | "monthly" | "quarterly" | "yearly" | "threshold"（偏离 ≥5% 触发）
+	DCA       float64 // 每月定投金额（>0 时额外计算定投模拟汇总）
+}
+
+// DCASummary 是按月定投的汇总结果。
+type DCASummary struct {
+	Monthly    float64 `json:"monthly"`
+	Months     int     `json:"months"`
+	Invested   float64 `json:"invested"`
+	FinalValue float64 `json:"finalValue"`
+	TotalRet   float64 `json:"totalRet"`
+	BenchValue float64 `json:"benchValue"`
+	BenchRet   float64 `json:"benchRet"`
 }
 
 // Stats 是收益风险指标（无风险利率按 0 计）。
@@ -55,22 +68,25 @@ type Year struct {
 
 // Output 是分析结果。
 type Output struct {
-	From      string       `json:"from"`
-	To        string       `json:"to"`
-	Dates     []string     `json:"dates"`
-	NAV       []float64    `json:"nav"`
-	BenchNAV  []float64    `json:"benchNav"`
-	Drawdown  []float64    `json:"drawdown"`
-	Stats     Stats        `json:"stats"`
-	Bench     Stats        `json:"bench"`
-	Beta      *float64     `json:"beta"`
-	BenchCorr *float64     `json:"benchCorr"`
-	Assets    []AssetStat  `json:"assets"`
-	CorrKeys  []string     `json:"corrKeys"`
-	Corr      [][]*float64 `json:"corr"`
-	Years     []Year       `json:"years"`
-	Missing   []string     `json:"missing"` // 没有数据、未计入的持仓
-	Note      string       `json:"note,omitempty"`
+	From       string       `json:"from"`
+	To         string       `json:"to"`
+	Dates      []string     `json:"dates"`
+	NAV        []float64    `json:"nav"`
+	BenchNAV   []float64    `json:"benchNav"`
+	Drawdown   []float64    `json:"drawdown"`
+	Stats      Stats        `json:"stats"`
+	Bench      Stats        `json:"bench"`
+	Beta       *float64     `json:"beta"`
+	BenchCorr  *float64     `json:"benchCorr"`
+	Assets     []AssetStat  `json:"assets"`
+	CorrKeys   []string     `json:"corrKeys"`
+	Corr       [][]*float64 `json:"corr"`
+	Years      []Year       `json:"years"`
+	Missing    []string     `json:"missing"` // 没有数据、未计入的持仓
+	Note       string       `json:"note,omitempty"`
+	Rebalance  string       `json:"rebalance"`
+	Rebalances int          `json:"rebalances"`
+	DCA        *DCASummary  `json:"dca,omitempty"`
 }
 
 // Analyze 计算组合表现。没有数据的持仓列入 Missing，其余持仓权重重新归一化。
@@ -141,21 +157,41 @@ func Analyze(in Input) Output {
 		totalW += a.Weight
 	}
 	px := make([][]float64, len(assets))
+	weights := make([]float64, len(assets))
 	units := make([]float64, len(assets))
 	for k, a := range assets {
 		px[k] = series(a.Prices)
-		units[k] = a.Weight / totalW / px[k][0]
+		weights[k] = a.Weight / totalW
+		units[k] = weights[k] / px[k][0]
 	}
+	rebal := in.Rebalance
+	if rebal == "" {
+		rebal = "none"
+	}
+	out.Rebalance = rebal
 	out.NAV = make([]float64, n)
 	for i := range cal {
+		val := 0.0
 		for k := range assets {
-			out.NAV[i] += units[k] * px[k][i]
+			val += units[k] * px[k][i]
+		}
+		out.NAV[i] = val
+		if i > 0 && val > 0 && shouldRebalance(rebal, cal[i-1], cal[i], units, px, weights, i, val) {
+			for k := range assets {
+				if px[k][i] > 0 {
+					units[k] = weights[k] * val / px[k][i]
+				}
+			}
+			out.Rebalances++
 		}
 	}
 	bench := series(in.Bench)
 	out.BenchNAV = make([]float64, n)
 	for i := range cal {
 		out.BenchNAV[i] = bench[i] / bench[0]
+	}
+	if in.DCA > 0 {
+		out.DCA = simulateDCA(cal, out.NAV, out.BenchNAV, in.DCA)
 	}
 	out.Drawdown = drawdown(out.NAV)
 	out.Stats, out.Bench = stats(out.NAV), stats(out.BenchNAV)
@@ -302,4 +338,62 @@ func HFQ(dates []string, close, mult []float64) map[string]float64 {
 		out[dates[i]] = h
 	}
 	return out
+}
+
+func shouldRebalance(mode, prevD, curD string, units []float64, px [][]float64, targetW []float64, i int, val float64) bool {
+	switch mode {
+	case "monthly":
+		return prevD[:7] != curD[:7]
+	case "quarterly":
+		return prevD[:4] != curD[:4] || quarterOf(prevD) != quarterOf(curD)
+	case "yearly":
+		return prevD[:4] != curD[:4]
+	case "threshold":
+		for k := range units {
+			w := units[k] * px[k][i] / val
+			if math.Abs(w-targetW[k]) >= 0.05 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func quarterOf(d string) int {
+	if len(d) < 7 {
+		return 0
+	}
+	m := int(d[5]-'0')*10 + int(d[6]-'0')
+	return (m - 1) / 3
+}
+
+// simulateDCA 每月首个交易日定投固定金额，对比组合与基准的期末市值与累计收益。
+func simulateDCA(cal []string, nav, bench []float64, monthly float64) *DCASummary {
+	var pfUnits, bmUnits float64
+	months := 0
+	lastYM := ""
+	for i, d := range cal {
+		ym := d[:7]
+		if ym != lastYM && nav[i] > 0 && bench[i] > 0 {
+			pfUnits += monthly / nav[i]
+			bmUnits += monthly / bench[i]
+			months++
+			lastYM = ym
+		}
+	}
+	if months == 0 {
+		return nil
+	}
+	invested := float64(months) * monthly
+	finalVal := pfUnits * nav[len(nav)-1]
+	benchVal := bmUnits * bench[len(bench)-1]
+	return &DCASummary{
+		Monthly:    monthly,
+		Months:     months,
+		Invested:   math.Round(invested*100) / 100,
+		FinalValue: math.Round(finalVal*100) / 100,
+		TotalRet:   finalVal/invested - 1,
+		BenchValue: math.Round(benchVal*100) / 100,
+		BenchRet:   benchVal/invested - 1,
+	}
 }

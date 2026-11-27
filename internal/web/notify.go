@@ -48,7 +48,7 @@ func (s *Server) notifyState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	settings := map[string]string{}
-	for _, k := range []string{job.SettingSignals, job.SettingSignalsSince, job.SettingWeekly} {
+	for _, k := range []string{job.SettingSignals, job.SettingSignalsSince, job.SettingWeekly, job.SettingOpsAlerts, job.SettingScheduleStart, job.SettingScheduleDeadline} {
 		v, err := s.store.Setting(ctx, k)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -56,13 +56,24 @@ func (s *Server) notifyState(w http.ResponseWriter, r *http.Request) {
 		}
 		settings[k] = v
 	}
+	schedStart := settings[job.SettingScheduleStart]
+	if schedStart == "" {
+		schedStart = "17:30"
+	}
+	schedDeadline := settings[job.SettingScheduleDeadline]
+	if schedDeadline == "" {
+		schedDeadline = "22:00"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"kinds":    notify.Kinds(),
-		"channels": out,
-		"logs":     logs,
-		"signals":  settings[job.SettingSignals] == "on",
-		"since":    settings[job.SettingSignalsSince],
-		"weekly":   settings[job.SettingWeekly] == "on",
+		"kinds":            notify.Kinds(),
+		"channels":         out,
+		"logs":             logs,
+		"signals":          settings[job.SettingSignals] == "on",
+		"since":            settings[job.SettingSignalsSince],
+		"weekly":           settings[job.SettingWeekly] == "on",
+		"opsAlerts":        settings[job.SettingOpsAlerts] == "on",
+		"scheduleStart":    schedStart,
+		"scheduleDeadline": schedDeadline,
 	})
 }
 
@@ -123,6 +134,7 @@ func (s *Server) saveChannel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(ctx, "notify.channel", strconv.FormatInt(id, 10), map[string]any{"kind": req.Kind, "name": name, "enabled": req.Enabled})
 	writeJSON(w, http.StatusOK, maskChannel(c))
 }
 
@@ -172,18 +184,23 @@ func (s *Server) testChannel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveNotifySettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req struct {
-		Signals *bool `json:"signals"`
-		Weekly  *bool `json:"weekly"`
+		Signals          *bool   `json:"signals"`
+		Weekly           *bool   `json:"weekly"`
+		OpsAlerts        *bool   `json:"opsAlerts"`
+		ScheduleStart    *string `json:"scheduleStart"`
+		ScheduleDeadline *string `json:"scheduleDeadline"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request")
 		return
 	}
+	changes := map[string]any{}
 	if req.Signals != nil {
 		if err := s.pusher.SetSignals(ctx, *req.Signals); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		changes["signals"] = *req.Signals
 	}
 	if req.Weekly != nil {
 		v := ""
@@ -194,6 +211,52 @@ func (s *Server) saveNotifySettings(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		changes["weekly"] = *req.Weekly
+	}
+	if req.OpsAlerts != nil {
+		v := ""
+		if *req.OpsAlerts {
+			v = "on"
+		}
+		if err := s.store.SetSetting(ctx, job.SettingOpsAlerts, v); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		changes["opsAlerts"] = *req.OpsAlerts
+	}
+	if req.ScheduleStart != nil || req.ScheduleDeadline != nil {
+		stStr := "17:30"
+		if v, err := s.store.Setting(ctx, job.SettingScheduleStart); err == nil && v != "" {
+			stStr = v
+		}
+		dlStr := "22:00"
+		if v, err := s.store.Setting(ctx, job.SettingScheduleDeadline); err == nil && v != "" {
+			dlStr = v
+		}
+		if req.ScheduleStart != nil {
+			stStr = strings.TrimSpace(*req.ScheduleStart)
+		}
+		if req.ScheduleDeadline != nil {
+			dlStr = strings.TrimSpace(*req.ScheduleDeadline)
+		}
+		sd, ok1 := job.ParseHHMM(stStr)
+		dd, ok2 := job.ParseHHMM(dlStr)
+		if !ok1 || !ok2 || dd <= sd {
+			writeErr(w, http.StatusBadRequest, "调度时间格式应为 HH:MM，且截止时间须晚于开始时间")
+			return
+		}
+		if err := s.store.SetSetting(ctx, job.SettingScheduleStart, stStr); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := s.store.SetSetting(ctx, job.SettingScheduleDeadline, dlStr); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		changes["scheduleStart"], changes["scheduleDeadline"] = stStr, dlStr
+	}
+	if len(changes) > 0 {
+		s.audit(ctx, "notify.settings", "settings", changes)
 	}
 	s.notifyState(w, r)
 }

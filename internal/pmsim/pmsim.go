@@ -250,14 +250,17 @@ type Params struct {
 	MaxOrderUSD  float64 `json:"maxOrderUsd"`  // 单笔买入金额上限
 	MaxDailyUSD  float64 `json:"maxDailyUsd"`  // 单日（本地时区）买入金额上限
 	MaxMarketUSD float64 `json:"maxMarketUsd"` // 单个市场的持仓成本上限
+	MaxAssetUSD  float64 `json:"maxAssetUsd"`  // 单资产（如 BTC / ETH 跨 5m/15m/1h）同时在途成本上限，0 不限
 	Halted       bool    `json:"halted"`       // 账户熔断：拒绝一切新委托
 }
 
-func DefaultParams() Params { return Params{MaxOrderUSD: 50, MaxDailyUSD: 500, MaxMarketUSD: 100} }
+func DefaultParams() Params {
+	return Params{MaxOrderUSD: 50, MaxDailyUSD: 500, MaxMarketUSD: 100, MaxAssetUSD: 150}
+}
 
 func (p Params) Validate() error {
-	if p.MaxOrderUSD <= 0 || p.MaxDailyUSD <= 0 || p.MaxMarketUSD <= 0 {
-		return errors.New("风控上限必须为正数")
+	if p.MaxOrderUSD <= 0 || p.MaxDailyUSD <= 0 || p.MaxMarketUSD <= 0 || p.MaxAssetUSD < 0 {
+		return errors.New("风控上限须合法（单笔/单日/单市场为正数，单资产非负）")
 	}
 	if p.MaxOrderUSD > p.MaxDailyUSD {
 		return errors.New("单笔上限不能超过单日上限")
@@ -272,12 +275,13 @@ type CheckInput struct {
 	Shares      float64 // 卖出股数
 	DailyBought float64 // 今日已买入金额
 	MarketCost  float64 // 该市场现有持仓成本（两个结果合计）
+	AssetCost   float64 // 同资产（如 BTC 跨周期）未结算持仓成本合计
 	Held        float64 // 该结果代币现有股数
 	Cash        float64
 	GlobalHalt  bool
 }
 
-// Check 执行风控：熔断、单笔 / 单日 / 单市场上限、现金、不可卖空。
+// Check 执行风控：熔断、单笔 / 单日 / 单市场 / 单资产上限、现金、不可卖空。
 func Check(p Params, in CheckInput) error {
 	switch {
 	case in.GlobalHalt:
@@ -298,6 +302,8 @@ func Check(p Params, in CheckInput) error {
 		return fmt.Errorf("超过单日上限 %.2f 美元（今日已买 %.2f）", p.MaxDailyUSD, in.DailyBought)
 	case in.MarketCost+in.Amount > p.MaxMarketUSD+1e-9:
 		return fmt.Errorf("超过单市场上限 %.2f 美元（已持有成本 %.2f）", p.MaxMarketUSD, in.MarketCost)
+	case p.MaxAssetUSD > 0 && in.AssetCost+in.Amount > p.MaxAssetUSD+1e-9:
+		return fmt.Errorf("超过单资产跨周期上限 %.2f 美元（同资产已持有 %.2f）", p.MaxAssetUSD, in.AssetCost)
 	case in.Amount > in.Cash+1e-9:
 		return fmt.Errorf("现金不足：%.2f 美元", in.Cash)
 	}

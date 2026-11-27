@@ -154,7 +154,15 @@ export type NotifyField = { key: string; label: string; help?: string; type?: st
 export type NotifyKind = { name: string; label: string; fields: NotifyField[] }
 export type NotifyChannel = { id: number; kind: string; kindLabel: string; name: string; config: Record<string, string>; enabled: boolean }
 export type NotifyLog = { key: string; title: string; result: string; sentAt: string }
-export type NotifyState = { kinds: NotifyKind[]; channels: NotifyChannel[]; logs: NotifyLog[]; signals: boolean; since: string; weekly: boolean }
+export type NotifyState = {
+  kinds: NotifyKind[]; channels: NotifyChannel[]; logs: NotifyLog[]; signals: boolean; since: string; weekly: boolean
+  opsAlerts: boolean; scheduleStart: string; scheduleDeadline: string
+}
+export type AuditEntry = { id: number; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
+export type PMTickHealth = {
+  symbol: string; samples: number; first: number; last: number
+  p50Ms: number; p95Ms: number; p99Ms: number; maxGapMs: number; gapsOver10s: number; uptimeRatio: number
+}
 export type ChannelInput = { kind: string; name: string; config: Record<string, string>; enabled: boolean }
 
 export type QRun = { from: string; to: string; days: number }
@@ -172,6 +180,7 @@ export type QualityReport = {
   gapDays: number
   gaps: { code: string; missing: number; runs: QRun[] }[]
   crossCheck: { at: string; from: string; recentFrom: string; codes: string[]; sources: CrossSource[]; diffs: QDiff[] | null; truncated: boolean } | null
+  pmTick?: PMTickHealth[] | null
   elapsedMs: number
 }
 
@@ -199,8 +208,18 @@ export type PortfolioAnalysis = {
     corrKeys: string[]; corr: (number | null)[][]
     years: { year: string; ret: number; bench: number; excess: number }[]
     missing: string[]; note?: string
+    rebalance?: string; rebalances?: number
+    dca?: { monthly: number; months: number; invested: number; finalValue: number; totalRet: number; benchValue: number; benchRet: number } | null
   }
 }
+
+export type ScreenerRow = {
+  code: string; kind: 'stock' | 'fund'; name: string; date: string; close: number
+  ret20: number | null; ret60: number | null; aboveMa200: boolean | null; distMa200: number | null
+  peTtm: number | null; pb: number | null; totalMv: number | null; amount: number | null
+}
+export type ScreenerResp = { asOf: string; universe: number; total: number; elapsedMs: number; items: ScreenerRow[] }
+export type ResearchNote = { id: number; target: string; title: string; content: string; tags: string; createdAt: string; updatedAt: string }
 
 export type SecuritySeries = {
   kind: string; code: string; name: string; dates: string[]; close: number[]; adjusted: number[]
@@ -288,7 +307,7 @@ export type PMBookTarget = { series: string; slug: string; token: string; symbol
 export type PMBookState =
   | { configured: false }
   | { configured: true
-      status: { running: boolean; every: string; targets: PMBookTarget[]; ticks: number; books: number; spots: number; lastRun?: string; errors: number; lastErr?: string; errAt?: string }
+      status: { running: boolean; every: string; targets: PMBookTarget[]; ticks: number; books: number; spots: number; lastRun?: string; errors: number; lastErr?: string; errAt?: string; wsEnabled?: boolean; wsSpotOk?: boolean; wsBookOk?: boolean }
       stats: { books: number; tokens: number; spots: number; first: number; last: number } }
 export type BookSnap = { t: number; bids: BookLevel[]; asks: BookLevel[] }
 export type PMEval = {
@@ -303,12 +322,56 @@ export type PMSignal = {
   id: number; t: number; strategy: string; slug: string; conditionId: string; outcome: number; p: number; ask: number; askSize: number
   feeRate: number; edge: number; k: number; kSrc: string; sdBp: number; tau: number; spot: number; basis: number; winner: number
 }
+export type PMBucketStat = {
+  key: string; n: number; resolved: number; wins: number; winRate: number
+  avgModelP: number; avgAsk: number; avgEdge: number; brier: number; theoreticalPnL: number
+}
+export type PMCalibBin = { label: string; n: number; meanP: number; actualRate: number; gap: number }
+export type PMReplayTrade = {
+  id: number; t: number; slug: string; series: string; outcome: number; kSrc: string; tau: number
+  p: number; signalAsk: number; fillAvg: number; slippage: number; shares: number; gross: number; fee: number
+  pnl: number; won: boolean; status: string; skipReason: string; bookSource: string
+}
+export type PMEvalConfig = {
+  days?: number; minEdge: number; kSrc: string; series: string; firstPerMarket: boolean
+  delayMs: number; heartbeatMs: number; clusterMin: number; initialCash: number
+  sizing: 'fixed' | 'kelly'; orderUsd: number; kellyFrac: number; maxAssetUsd: number; useFairLimit: boolean
+}
+export type PMEvalReport = {
+  config: PMEvalConfig; rawSignals: number; filteredSignals: number; uniqueMarkets: number; clusters: number
+  overall: PMBucketStat; byKSrc: PMBucketStat[]; bySeries: PMBucketStat[]; byTau: PMBucketStat[]
+  calibration: PMCalibBin[]
+  replay: {
+    executed: number; wins: number; losses: number; winRate: number
+    skippedStale: number; skippedNoBook: number; skippedRisk: number; skippedNoFill: number
+    initialCash: number; finalEquity: number; netPnl: number; totalGross: number; totalFees: number
+    roiOnVolume: number; maxDD: number; avgSlippage: number; clusters: number; clusterWinRate: number; clusterSharpe: number
+    curve: { t: number; equity: number; cumPnl: number; trades: number }[]
+    trades: PMReplayTrade[]
+  }
+}
+
 export type PricePoint = { t: number; p: number }
 export type BookLevel = { price: number; size: number }
 export type Book = { token: string; time: string; bids: BookLevel[]; asks: BookLevel[] }
 
 // ---- 预测市场模拟盘 ----
-export type PMSimParams = { maxOrderUsd: number; maxDailyUsd: number; maxMarketUsd: number; halted: boolean }
+export type PMSimParams = { maxOrderUsd: number; maxDailyUsd: number; maxMarketUsd: number; maxAssetUsd?: number; halted: boolean }
+export type PMArbLeg = { conditionId: string; question: string; outcome: string; bestAsk: number; avgAsk: number; askSize: number; feeRate: number }
+export type PMArbOpp = {
+  kind: 'binary' | 'negrisk'; slug: string; title: string; series?: string; shares: number
+  rawSumAsk: number; totalCost: number; payout: number; netProfit: number; netPerUnit: number; roi: number; legs: PMArbLeg[]
+}
+export type PMArbResp = { scannedEvents: number; scannedTokens: number; targetShares: number; at: string; opportunities: PMArbOpp[] }
+export type PMExecConfig = {
+  mode: 'shadow' | 'hitl' | 'auto_sim'; accountId: number; sizing: 'fixed' | 'kelly'; orderUsd: number
+  kellyFrac: number; kSrc: string; minEdge: number; ttlSec: number; notify: boolean
+}
+export type PMProposal = {
+  id: number; createdAt: number; expiresAt: number; strategy: string; slug: string; conditionId: string
+  outcome: number; p: number; ask: number; edge: number; suggestedUsd: number; kSrc: string; tau: number
+  status: 'pending' | 'approved' | 'rejected' | 'expired'; accountId: number; orderId?: number; reason?: string
+}
 export type PMFill = { shares: number; gross: number; fee: number; levels: BookLevel[] | null }
 export type PMOrder = {
   id: number; account: number; time: string; slug: string; conditionId: string; token: string; outcome: number; outcomeName: string
@@ -370,7 +433,15 @@ export const api = {
   portfolios: () => request<PortfolioData[]>('GET', '/api/portfolios'),
   savePortfolio: (p: PortfolioData) => (p.id ? request<PortfolioData>('PUT', `/api/portfolios/${p.id}`, p) : request<PortfolioData>('POST', '/api/portfolios', p)),
   deletePortfolio: (id: number) => request<{ ok: boolean }>('DELETE', `/api/portfolios/${id}`),
-  analyzePortfolio: (id: number) => request<PortfolioAnalysis>('GET', `/api/portfolios/${id}/analysis`),
+  analyzePortfolio: (id: number, rebalance = 'none', dca = 0) =>
+    request<PortfolioAnalysis>('GET', `/api/portfolios/${id}/analysis?rebalance=${encodeURIComponent(rebalance)}&dca=${dca}`),
+  screener: (params: Record<string, string>) =>
+    request<ScreenerResp>('GET', `/api/screener?${new URLSearchParams(params).toString()}`),
+  notes: (target = '', limit = 50) =>
+    request<ResearchNote[]>('GET', `/api/notes?target=${encodeURIComponent(target)}&limit=${limit}`),
+  saveNote: (n: { id?: number; target: string; title: string; content: string; tags: string }) =>
+    n.id ? request<ResearchNote>('PUT', `/api/notes/${n.id}`, n) : request<ResearchNote>('POST', '/api/notes', n),
+  deleteNote: (id: number) => request<{ ok: boolean }>('DELETE', `/api/notes/${id}`),
   simAccounts: () => request<{ accounts: SimAccount[]; defaults: SimParams }>('GET', '/api/sim/accounts'),
   createSimAccount: (a: { name: string; cash: number; start: string; params: SimParams }) => request<{ id: number }>('POST', '/api/sim/accounts', a),
   simAccount: (id: number) => request<SimView>('GET', `/api/sim/accounts/${id}`),
@@ -384,7 +455,10 @@ export const api = {
   testPlugin: (kind: string, name: string) =>
     request<{ target: string; count: number; elapsedMs: number; last?: unknown; error?: string }>('POST', `/api/plugins/${kind}/${name}/test`),
   notify: () => request<NotifyState>('GET', '/api/notify'),
-  saveNotifySettings: (body: { signals?: boolean; weekly?: boolean }) => request<NotifyState>('POST', '/api/notify/settings', body),
+  saveNotifySettings: (body: { signals?: boolean; weekly?: boolean; opsAlerts?: boolean; scheduleStart?: string; scheduleDeadline?: string }) =>
+    request<NotifyState>('POST', '/api/notify/settings', body),
+  audits: (action = '', limit = 100) =>
+    request<AuditEntry[]>('GET', `/api/audit?action=${encodeURIComponent(action)}&limit=${limit}`),
   saveChannel: (id: number, c: ChannelInput) =>
     id ? request<NotifyChannel>('PUT', `/api/notify/channels/${id}`, c) : request<NotifyChannel>('POST', '/api/notify/channels', c),
   deleteChannel: (id: number) => request<{ ok: boolean }>('DELETE', `/api/notify/channels/${id}`),
@@ -402,6 +476,14 @@ export const api = {
   pmPrices: (token: string, from = 0, to = 0, fidelity = 0) =>
     request<{ points: PricePoint[]; source: string }>('GET', `/api/pm/prices?token=${encodeURIComponent(token)}&from=${from}&to=${to}&fidelity=${fidelity}`),
   pmSignals: (since = 0) => request<PMSignal[]>('GET', `/api/pm/signals?since=${since}`),
+  pmEval: (cfg: Partial<PMEvalConfig>) => request<{ report: PMEvalReport; elapsedMs: number }>('POST', '/api/pm/eval', cfg),
+  pmArb: (shares = 50) => request<PMArbResp>('GET', `/api/pm/arb?shares=${shares}`),
+  pmExec: () => request<PMExecConfig>('GET', '/api/pm/exec'),
+  pmExecSave: (cfg: PMExecConfig) => request<PMExecConfig>('POST', '/api/pm/exec', cfg),
+  pmProposals: () => request<PMProposal[]>('GET', '/api/pm/proposals'),
+  pmProposalApprove: (id: number, body: { accountId?: number; amount?: number }) =>
+    request<{ order: PMOrder }>('POST', `/api/pm/proposals/${id}/approve`, body),
+  pmProposalReject: (id: number) => request<{ ok: boolean }>('POST', `/api/pm/proposals/${id}/reject`),
   pmBooks: (token: string, from = 0, to = 0) => request<BookSnap[]>('GET', `/api/pm/books?token=${encodeURIComponent(token)}&from=${from}&to=${to}`),
   pmBook: (token: string) => request<Book>('GET', `/api/pm/book?token=${encodeURIComponent(token)}`),
   pmWatch: (slug: string) => request<{ ok: boolean }>('POST', '/api/pm/watch', { slug }),

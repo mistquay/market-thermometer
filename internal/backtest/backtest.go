@@ -12,11 +12,12 @@ import (
 
 // Config 是回测设置。
 type Config struct {
-	From      string `json:"from"`      // 统计区间起点（含）
-	To        string `json:"to"`        // 终点（含），空为不限
-	Split     string `json:"split"`     // 样本内 / 样本外分界：< Split 为样本内
-	Horizons  []int  `json:"horizons"`  // 前瞻收益的交易日数
-	MAEWindow int    `json:"maeWindow"` // 最大不利波动的观察窗口
+	From      string  `json:"from"`      // 统计区间起点（含）
+	To        string  `json:"to"`        // 终点（含），空为不限
+	Split     string  `json:"split"`     // 样本内 / 样本外分界：< Split 为样本内
+	Horizons  []int   `json:"horizons"`  // 前瞻收益的交易日数
+	MAEWindow int     `json:"maeWindow"` // 最大不利波动的观察窗口
+	CostBps   float64 `json:"costBps"`   // 单边换手交易成本（基点，如 10 = 万 10，默认 0）
 
 	Position engine.PositionParams `json:"-"` // 分层持仓参数，取自打分参数
 }
@@ -168,7 +169,7 @@ func Run(days []engine.Day, events []engine.Event, cfg Config) Result {
 		res.Dates = append(res.Dates, days[i].Date)
 	}
 	res.Close = closes[lo:hi]
-	res.Strategies = strategies(days, events, ma, lo, hi, cfg.Position)
+	res.Strategies = strategies(days, events, ma, lo, hi, cfg.Position, cfg.CostBps)
 	res.CorrNames, res.Corr = correlations(days[lo:hi])
 	return res
 }
@@ -292,8 +293,8 @@ func baseRate(closes []float64, lo, hi int, cfg Config) []HStat {
 	return out
 }
 
-// strategies：信号在第 t 日收盘产生，第 t+1 日起生效（无未来函数）；不计交易成本。
-func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi int, pp engine.PositionParams) []Strategy {
+// strategies：信号在第 t 日收盘产生，第 t+1 日起生效（无未来函数）；支持按换手扣除单边交易成本（costBps）。
+func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi int, pp engine.PositionParams, costBps float64) []Strategy {
 	n := hi - lo
 	thermo := make([]float64, len(days))
 	layered := make([]float64, len(days))
@@ -331,7 +332,8 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 	for i := range hold {
 		hold[i] = 1
 	}
-	// p[i] 为第 i 日收盘后的仓位（0–1），决定第 i+1 日的收益；未持仓部分收益为 0，不计交易成本。
+	// p[i] 为第 i 日收盘后的仓位（0–1），决定第 i+1 日的收益；仓位变化时按换手扣除单边交易成本。
+	costRate := max(0, costBps) / 10000
 	mk := func(name, label string, p []float64) Strategy {
 		s := Strategy{Name: name, Label: label, Equity: make([]float64, n), Position: make([]float64, n)}
 		eq, peak, held := 1.0, 1.0, 0.0
@@ -340,8 +342,11 @@ func strategies(days []engine.Day, events []engine.Event, ma []float64, lo, hi i
 			if k > 0 {
 				eq *= 1 + p[i-1]*(days[i].Close/days[i-1].Close-1)
 				held += p[i-1]
-				if p[i] != p[i-1] {
+				if dp := math.Abs(p[i] - p[i-1]); dp > 1e-9 {
 					s.Switches++
+					if costRate > 0 {
+						eq *= 1 - dp*costRate
+					}
 				}
 			}
 			peak = math.Max(peak, eq)

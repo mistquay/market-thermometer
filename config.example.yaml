@@ -2,6 +2,7 @@
 
 listen: 127.0.0.1:8080        # 公网部署时放在 Caddy/Nginx 之后，由反代负责 HTTPS
 db_path: data/mt.db
+# tick_db_path: data/mt-tick.db # 高频盘口/现货快照独立 SQLite 路径；留空时由 db_path 自动推导
 admin_password_hash: ""       # 运行 `mt hashpw` 生成
 http_proxy: ""                # 仅用于需要代理的出站请求（如 Telegram），A股数据源直连
 backfill_start: 2005-01-01    # 全量回填起点
@@ -79,6 +80,7 @@ polymarket:
     every_ms: 2500
     levels: 10                     # 每边保存的档数
     keep_days: 14                  # 保留天数
+    ws: false                      # true：启用币安与 CLOB WebSocket 实时推送（断线自动回退 REST）
     # series: [btc-up-or-down-5m]  # 默认与上面的 series 相同
   strategy:                       # 短期涨跌盘公允概率策略（需要 book）
     shadow: true                   # 影子模式：每轮采集后计算 P(Up)，与盘口比较，只记录信号、不下单

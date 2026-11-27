@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -149,12 +150,16 @@ func (s *Sim) Place(ctx context.Context, req OrderReq) (pmsim.Order, error) {
 		return pmsim.Order{}, err
 	}
 	in := pmsim.CheckInput{Side: req.Side, Shares: req.Shares, Cash: view.State.Cash, GlobalHalt: halt == "1"}
+	targetAsset := slugAsset(ev.Slug)
 	for _, p := range view.State.Positions {
 		if p.Settled {
 			continue
 		}
 		if p.Cond == m.ConditionID {
 			in.MarketCost += p.Cost
+		}
+		if targetAsset != "" && slugAsset(p.Slug) == targetAsset {
+			in.AssetCost += p.Cost
 		}
 		if p.Token == o.Token {
 			in.Held = p.Shares
@@ -322,3 +327,12 @@ func GlobalHalt(ctx context.Context, st *store.Store) (bool, error) {
 }
 
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
+
+// slugAsset 从事件 slug 提取底层加密资产前缀（如 btc-updown-5m-123 → btc），用于跨周期联合敞口风控。
+func slugAsset(slug string) string {
+	a, rest, ok := strings.Cut(strings.ToLower(slug), "-")
+	if !ok || !strings.HasPrefix(rest, "updown-") && !strings.HasPrefix(rest, "up-or-down-") {
+		return ""
+	}
+	return a
+}

@@ -31,22 +31,25 @@ type Options struct {
 	// PluginOptions 是内置插件在 config.yaml 中的选项（插件 ID → 选项），管理页只读展示。
 	PluginOptions map[string]map[string]any
 	Crypto        *job.CryptoSyncer    // 加密行情同步器；为 nil 时加密页显示未配置
+	CryptoSources []string             // 已配置的加密行情插件名（供插件页准确显示状态）
 	PM            *job.PMSyncer        // Polymarket 同步器；为 nil 时预测市场页显示未配置
 	PMBook        *job.PMBookCollector // 盘口采集器；为 nil 时不采集
 	PMShadow      *job.PMShadow        // 策略影子模式；为 nil 时未启用
 }
 
 type Server struct {
-	opt     Options
-	store   *store.Store
-	hub     *ds.Hub
-	runner  *job.Runner
-	pusher  *job.Pusher
-	limiter *loginLimiter
+	opt       Options
+	store     *store.Store
+	hub       *ds.Hub
+	runner    *job.Runner
+	pusher    *job.Pusher
+	limiter   *loginLimiter
+	startedAt time.Time
 
-	pmSim       *pmtrade.Sim // 预测市场模拟盘；未配置预测市场时为 nil
-	stockSource string       // 个股数据源名称，仅用于展示
-	now         func() time.Time
+	pmSim         *pmtrade.Sim // 预测市场模拟盘；未配置预测市场时为 nil
+	stockSource   string       // 个股数据源名称，仅用于展示
+	screenerCache screenerCache
+	now           func() time.Time
 }
 
 func New(opt Options, st *store.Store, hub *ds.Hub, runner *job.Runner) *Server {
@@ -55,7 +58,7 @@ func New(opt Options, st *store.Store, hub *ds.Hub, runner *job.Runner) *Server 
 		c := &http.Client{Timeout: 30 * time.Second}
 		pusher = job.NewPusher(st, notify.Env{HTTP: c, Proxy: c}, market.CN)
 	}
-	srv := &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, pusher: pusher, limiter: newLoginLimiter(), now: time.Now}
+	srv := &Server{opt: opt, stockSource: opt.StockSource, store: st, hub: hub, runner: runner, pusher: pusher, limiter: newLoginLimiter(), startedAt: time.Now(), now: time.Now}
 	if opt.PM.Configured() {
 		srv.pmSim = pmtrade.NewSim(st, opt.PM.Source())
 	}
@@ -127,6 +130,13 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/pm/book", s.auth(s.pmBook))
 	api.HandleFunc("GET /api/pm/books", s.auth(s.pmBooks))
 	api.HandleFunc("GET /api/pm/signals", s.auth(s.pmSignals))
+	api.HandleFunc("POST /api/pm/eval", s.auth(s.pmEval))
+	api.HandleFunc("GET /api/pm/arb", s.auth(s.pmArb))
+	api.HandleFunc("GET /api/pm/exec", s.auth(s.pmExecGet))
+	api.HandleFunc("POST /api/pm/exec", s.auth(s.pmExecSave))
+	api.HandleFunc("GET /api/pm/proposals", s.auth(s.pmProposals))
+	api.HandleFunc("POST /api/pm/proposals/{id}/approve", s.auth(s.pmProposalApprove))
+	api.HandleFunc("POST /api/pm/proposals/{id}/reject", s.auth(s.pmProposalReject))
 	api.HandleFunc("POST /api/pm/watch", s.auth(s.pmWatch))
 	api.HandleFunc("DELETE /api/pm/watch/{slug}", s.auth(s.pmUnwatch))
 	api.HandleFunc("POST /api/pm/sync", s.auth(s.startPMSync))
@@ -139,11 +149,18 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/pm/halt", s.auth(s.setPMHalt))
 	api.HandleFunc("GET /api/jobs/current", s.auth(s.currentJob))
 	api.HandleFunc("GET /api/jobs", s.auth(s.recentJobs))
+	api.HandleFunc("GET /api/audit", s.auth(s.audits))
+	api.HandleFunc("GET /api/screener", s.auth(s.screener))
+	api.HandleFunc("GET /api/notes", s.auth(s.notesList))
+	api.HandleFunc("POST /api/notes", s.auth(s.noteSave))
+	api.HandleFunc("PUT /api/notes/{id}", s.auth(s.noteSave))
+	api.HandleFunc("DELETE /api/notes/{id}", s.auth(s.noteDelete))
 	api.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 	})
 
 	root := http.NewServeMux()
+	root.HandleFunc("GET /healthz", s.healthz)
 	root.Handle("/api/", s.guard(api))
 	if s.opt.Static != nil {
 		root.Handle("/", spaHandler(s.opt.Static))

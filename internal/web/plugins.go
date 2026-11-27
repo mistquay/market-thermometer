@@ -57,7 +57,7 @@ func (s *Server) plugins(w http.ResponseWriter, r *http.Request) {
 				o.Values[k] = fmt.Sprint(v)
 			}
 			o.Values = plugin.Mask(m.Config, o.Values)
-			o.Enabled, o.State = builtinState(m, s.hub, stocks, funds, fundNAV, chs)
+			o.Enabled, o.State = s.builtinState(m, stocks, funds, fundNAV, chs)
 		}
 		if m.Kind == plugin.KindMetric && len(m.Metrics) == 0 {
 			for _, id := range s.hub.Provides(m.Name) {
@@ -71,10 +71,10 @@ func (s *Server) plugins(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func builtinState(m plugin.Manifest, hub *ds.Hub, stocks, funds, fundNAV []string, chs []store.NotifyChannel) (bool, string) {
+func (s *Server) builtinState(m plugin.Manifest, stocks, funds, fundNAV []string, chs []store.NotifyChannel) (bool, string) {
 	switch m.Kind {
 	case plugin.KindMetric:
-		if slices.Contains(hub.Sources(), m.Name) {
+		if slices.Contains(s.hub.Sources(), m.Name) {
 			return true, "已启用"
 		}
 		return false, "未启用（config.yaml 的 sources.enabled）"
@@ -95,6 +95,16 @@ func builtinState(m plugin.Manifest, hub *ds.Hub, stocks, funds, fundNAV []strin
 			return true, "已启用"
 		}
 		return false, "未启用（config.yaml 的 funds.sources）"
+	case plugin.KindCrypto:
+		if s.opt.Crypto.Configured() && slices.Contains(s.opt.CryptoSources, m.Name) {
+			return true, "已启用（7×24 同步）"
+		}
+		return false, "未启用（config.yaml 的 crypto.sources）"
+	case plugin.KindPrediction:
+		if s.opt.PM.Configured() && s.opt.PM.Source().Name() == m.Name {
+			return true, "已启用（7×24 同步）"
+		}
+		return false, "未启用（config.yaml 的 polymarket.source）"
 	case plugin.KindNotifier:
 		n := 0
 		for _, c := range chs {
@@ -132,6 +142,7 @@ func (s *Server) savePlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	p.SetConfig(cfg)
 	p.SetEnabled(req.Enabled)
+	s.audit(r.Context(), "plugin.config", m.ID(), map[string]any{"enabled": req.Enabled})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

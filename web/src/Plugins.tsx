@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Play, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { api, ApiError, type PluginInfo } from './api'
 
-const KIND_ORDER = ['strategy', 'derived', 'metric_source', 'stock_source', 'fund_source', 'notifier', 'broker']
+const KIND_ORDER = ['strategy', 'derived', 'metric_source', 'stock_source', 'fund_source', 'crypto_source', 'prediction_source', 'notifier', 'broker']
 
 type TestResult = { busy: boolean; text?: string; error?: string }
 

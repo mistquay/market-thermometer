@@ -3,7 +3,10 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
@@ -65,6 +68,38 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 
+// ParseHHMM 解析 "HH:MM" 为距当日 0 点的时长。
+func ParseHHMM(s string) (time.Duration, bool) {
+	h, m, ok := strings.Cut(strings.TrimSpace(s), ":")
+	if !ok {
+		return 0, false
+	}
+	hh, err1 := strconv.Atoi(h)
+	mm, err2 := strconv.Atoi(m)
+	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return 0, false
+	}
+	return time.Duration(hh)*time.Hour + time.Duration(mm)*time.Minute, true
+}
+
+func (s *Scheduler) window(ctx context.Context) (start, deadline time.Duration) {
+	start, deadline = s.Start, s.Deadline
+	if s.runner == nil || s.runner.store == nil {
+		return
+	}
+	if v, err := s.runner.store.Setting(ctx, SettingScheduleStart); err == nil {
+		if d, ok := ParseHHMM(v); ok {
+			start = d
+		}
+	}
+	if v, err := s.runner.store.Setting(ctx, SettingScheduleDeadline); err == nil {
+		if d, ok := ParseHHMM(v); ok && d > start {
+			deadline = d
+		}
+	}
+	return
+}
+
 func (s *Scheduler) tick(ctx context.Context) {
 	now := s.now().In(ds.Shanghai)
 	if wd := now.Weekday(); wd == time.Saturday || wd == time.Sunday {
@@ -72,7 +107,8 @@ func (s *Scheduler) tick(ctx context.Context) {
 	}
 	today := now.Format("2006-01-02")
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, ds.Shanghai)
-	if now.Before(midnight.Add(s.Start)) || now.Before(s.nextTry) {
+	start, dl := s.window(ctx)
+	if now.Before(midnight.Add(start)) || now.Before(s.nextTry) {
 		return
 	}
 	if done, err := s.runner.store.Setting(ctx, SettingScheduleDone); err != nil || done >= today {
@@ -81,7 +117,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 		}
 		return
 	}
-	deadline := midnight.Add(s.Deadline)
+	deadline := midnight.Add(dl)
 	final := !now.Before(deadline) // 已到截止时间：本次之后不再重试
 
 	if err := s.sync(ctx); err != nil {
@@ -93,6 +129,11 @@ func (s *Scheduler) tick(ctx context.Context) {
 		if !final {
 			s.retryLater(now, deadline)
 			return
+		}
+		if s.pusher != nil {
+			s.pusher.SendAlert(ctx, "sync-fail-"+today, "⚠【运维告警 · A 股每日同步失败】", []string{
+				fmt.Sprintf("交易日 %s 已到达截止时间，同步仍失败：%v", today, err),
+			})
 		}
 	}
 	have, degraded, err := s.complete(ctx, today)

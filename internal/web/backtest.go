@@ -83,6 +83,7 @@ func (s *Server) saveParams(w http.ResponseWriter, r *http.Request) {
 		}
 		out["events"], out["days"] = res.Events, res.Days
 	}
+	s.audit(r.Context(), "params.save", req.Params.Version(), map[string]any{"name": req.Name, "activate": req.Activate})
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -3,6 +3,7 @@ import { api, ApiError, type JobStatus, type PortfolioAnalysis, type PortfolioDa
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
 import { useTheme } from './theme'
+import { NotesBox } from './NotesBox'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 
@@ -18,6 +19,8 @@ export default function Portfolio() {
   const [selected, setSelected] = useState(0)
   const [draft, setDraft] = useState<PortfolioData | null>(null)
   const [analysis, setAnalysis] = useState<PortfolioAnalysis | null>(null)
+  const [rebalance, setRebalance] = useState<'none' | 'monthly' | 'quarterly' | 'yearly' | 'threshold'>('none')
+  const [dca, setDca] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -27,13 +30,13 @@ export default function Portfolio() {
   }, (e) => setError(e.message)), [])
   useEffect(() => { load() }, [load])
 
-  const analyze = useCallback((id: number) => {
+  const analyze = useCallback((id: number, rb = rebalance, monthly = dca) => {
     if (!id) return
     setBusy(true)
     setError('')
-    api.analyzePortfolio(id).then(setAnalysis, (e) => { setAnalysis(null); setError(e.message) }).finally(() => setBusy(false))
-  }, [])
-  useEffect(() => { setAnalysis(null); analyze(selected) }, [selected, analyze])
+    api.analyzePortfolio(id, rb, monthly).then(setAnalysis, (e) => { setAnalysis(null); setError(e.message) }).finally(() => setBusy(false))
+  }, [rebalance, dca])
+  useEffect(() => { setAnalysis(null); analyze(selected, rebalance, dca) }, [selected, rebalance, dca, analyze])
 
   const current = list.find((p) => p.id === selected)
 
@@ -91,12 +94,39 @@ export default function Portfolio() {
                   <strong>{current.name}</strong>
                   <span className="muted">{current.note}</span>
                   <span style={{ flex: 1 }} />
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--ink-2)]">
+                    <span>再平衡</span>
+                    <select
+                      className="h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2 text-xs text-[var(--ink)]"
+                      value={rebalance}
+                      onChange={(e) => setRebalance(e.target.value as typeof rebalance)}
+                    >
+                      <option value="none">不平衡（买入持有）</option>
+                      <option value="monthly">按月再平衡</option>
+                      <option value="quarterly">按季再平衡</option>
+                      <option value="yearly">按年再平衡</option>
+                      <option value="threshold">阈值再平衡（偏离≥5%）</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--ink-2)]">
+                    <span>月定投</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={500}
+                      placeholder="0"
+                      className="mono h-8 w-24 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2 text-xs text-[var(--ink)]"
+                      value={dca || ''}
+                      onChange={(e) => setDca(Math.max(0, e.target.valueAsNumber || 0))}
+                    />
+                  </label>
                   <button className="btn btn-ghost" onClick={() => setDraft(structuredClone(current))}>编辑</button>
                   <button className="btn btn-ghost" onClick={remove}>删除</button>
                 </div>
               </section>
               {busy && <div className="panel empty">计算中…</div>}
               {analysis && <Analysis a={analysis} />}
+              <NotesBox target={`portfolio:${current.id}`} label={current.name} />
             </>
           ) : null}
         </div>
@@ -279,8 +309,30 @@ function Analysis({ a }: { a: PortfolioAnalysis }) {
           <div key={k} className="panel pf-tile"><span className="muted small">{k}</span><strong className="mono">{v}</strong><span className="muted small">{sub}</span></div>
         ))}
       </div>
+      {r.dca && (
+        <section className="panel px-5 py-3.5">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+            <strong className="text-sm">定投模拟（每月 ¥{r.dca.monthly.toLocaleString('zh-CN')}）</strong>
+            <span className="mono text-[var(--ink-2)]">共 {r.dca.months} 期 · 累计投入 ¥{r.dca.invested.toLocaleString('zh-CN')}</span>
+            <span className="mono">
+              期末市值 <strong>¥{r.dca.finalValue.toLocaleString('zh-CN')}</strong>（
+              <span className={dir(r.dca.totalRet)}>{pct(r.dca.totalRet)}</span>）
+            </span>
+            <span className="mono text-[var(--ink-2)]">
+              同期定投沪深300：¥{r.dca.benchValue.toLocaleString('zh-CN')}（{pct(r.dca.benchRet)}）
+            </span>
+          </div>
+        </section>
+      )}
       <section className="panel chart-panel">
-        <div className="panel-head"><strong>净值与回撤</strong><span className="muted">{r.from} ~ {r.to}，{r.dates.length} 个交易日，耗时 {a.elapsedMs} ms</span></div>
+        <div className="panel-head">
+          <strong>净值与回撤</strong>
+          <span className="muted">
+            {r.from} ~ {r.to}，{r.dates.length} 个交易日
+            {r.rebalances ? `，再平衡 ${r.rebalances} 次` : ''}
+            ，耗时 {a.elapsedMs} ms
+          </span>
+        </div>
         {navOption && <EChart option={navOption} height={420} />}
       </section>
       <section className="panel">

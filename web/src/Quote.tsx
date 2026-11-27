@@ -5,6 +5,7 @@ import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
 import { useTheme } from './theme'
 import { RENDERERS, useKlineRenderer, type KlineData } from './kline/kline'
+import { NotesBox } from './NotesBox'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 const MAS = [20, 60, 250]
@@ -424,6 +425,8 @@ export default function Quote() {
           </div>
         </section>
       )}
+
+      {data && <NotesBox target={`${data.kind}:${data.code}`} label={`${data.code} ${data.name}`} />}
 
       {!data && !error && (
         <div className="panel flex flex-col items-center justify-center gap-3 py-20 text-center">

@@ -132,6 +132,7 @@ func (s *Server) placeSimOrders(w http.ResponseWriter, r *http.Request) {
 	if s.simErr(w, err) {
 		return
 	}
+	s.audit(r.Context(), "sim.order", strconv.FormatInt(id, 10), map[string]any{"source": req.Source, "count": len(ids)})
 	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
 }
 

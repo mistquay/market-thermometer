@@ -51,6 +51,8 @@ func Install(spec Spec) (*Process, error) {
 			New: func(cfg map[string]string, _ notify.Env) (notify.Notifier, error) {
 				return &notifier{p: p, cfg: cfg}, nil
 			}})
+	case plugin.KindBroker:
+		// 交易通道：通过 ext.GetBroker(name) 调用，遵循 docs/plugin-protocol.md §5
 	default:
 		return nil, fmt.Errorf("暂不支持外部 %s 类型的插件（%s）", plugin.KindLabel[m.Kind], m.Name)
 	}

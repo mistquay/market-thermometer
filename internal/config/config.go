@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Listen            string `yaml:"listen"`
 	DBPath            string `yaml:"db_path"`
+	TickDBPath        string `yaml:"tick_db_path"` // 高频盘口快照独立 SQLite 路径；为空则由 db_path 自动推导（*-tick.db）
 	AdminPasswordHash string `yaml:"admin_password_hash"`
 	// HTTPProxy 仅用于需要代理的出站请求（如 Telegram），A股数据源默认直连。
 	HTTPProxy string `yaml:"http_proxy"`
@@ -49,6 +50,7 @@ type PMBook struct {
 	Levels   int      `yaml:"levels"`    // 每边保存的档数，默认 10
 	KeepDays int      `yaml:"keep_days"` // 保留天数，默认 14
 	Series   []string `yaml:"series"`    // 采集的系列，默认与 series 相同
+	WS       bool     `yaml:"ws"`        // 启用 WebSocket 实时盘口与币安现货推送（断线自动回退 REST）
 }
 
 // Crypto 是加密货币行情配置。Sources 按顺序回退；为空时不同步。

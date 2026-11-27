@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Coins,
   Database,
+  Filter,
   FlaskConical,
   Gauge,
   Layers,
@@ -39,6 +40,7 @@ import Quality from './Quality'
 import Plugins from './Plugins'
 import Portfolio from './Portfolio'
 import Quote from './Quote'
+import Screener from './Screener'
 import Sim from './Sim'
 import Crypto from './Crypto'
 import Predict from './Predict'
@@ -64,6 +66,7 @@ const PAGES: PageDef[] = [
   { path: 'backtest', label: '策略回测', group: 'A 股温度计', icon: FlaskConical, wide: true, keywords: 'backtest robust 稳健性', el: () => <Backtest /> },
 
   { path: 'quote', label: '行情图表', group: '投研与模拟', icon: CandlestickChart, wide: true, keywords: 'kline stock 股票', el: () => <Quote /> },
+  { path: 'screener', label: '本地选股器', group: '投研与模拟', icon: Filter, wide: true, keywords: 'screener filter 选股 估值 pe pb ma200', el: () => <Screener /> },
   { path: 'portfolio', label: '组合分析', group: '投研与模拟', icon: PieChart, keywords: 'portfolio', el: () => <Portfolio /> },
   { path: 'funds', label: '基金自选', group: '投研与模拟', icon: Layers, keywords: 'funds etf', el: () => <Funds /> },
   { path: 'sim', label: 'A 股模拟盘', group: '投研与模拟', icon: Wallet, wide: true, keywords: 'paper trading 模拟交易', el: () => <Sim /> },
