@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -97,6 +99,8 @@ func main() {
 		err = cmdConfig(os.Args[2:])
 	case "hashpw":
 		err = cmdHashPW()
+	case "healthcheck":
+		err = cmdHealthcheck(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Printf("mt %s (commit %s, built %s)\n", version, commit, buildDate)
 		return
@@ -109,7 +113,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|config|crypto|polymarket|pmbook|pmeval|gapfill|import-bars|ext-backfill|hashpw|version [-db data/mt.db] [-listen 127.0.0.1:8080]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|config|crypto|polymarket|pmbook|pmeval|gapfill|import-bars|ext-backfill|hashpw|healthcheck|version [-db data/mt.db] [-listen 127.0.0.1:8080]")
 	os.Exit(2)
 }
 
@@ -843,5 +847,48 @@ func cmdHashPW() error {
 		return err
 	}
 	fmt.Printf("admin_password_hash: %q\n", string(h))
+	return nil
+}
+
+// healthcheckURL 根据监听地址推导本机 /healthz 探测 URL（适配 distroless 无 shell/wget 健康检查）。
+func healthcheckURL(listen string) string {
+	addr := strings.TrimSpace(listen)
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://127.0.0.1:8080/healthz"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz"
+}
+
+func cmdHealthcheck(args []string) error {
+	fs := flag.NewFlagSet("healthcheck", flag.ExitOnError)
+	target := fs.String("url", "", "健康检查 URL（留空则按 MT_LISTEN 自动推导本机 /healthz）")
+	timeout := fs.Duration("timeout", 4*time.Second, "请求超时时间")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	u := strings.TrimSpace(*target)
+	if u == "" {
+		u = healthcheckURL(os.Getenv("MT_LISTEN"))
+	}
+	// 显式禁用代理，避免容器内配置了 HTTP_PROXY 时劫持本机回环探测
+	cli := &http.Client{
+		Timeout:   *timeout,
+		Transport: &http.Transport{Proxy: nil},
+	}
+	resp, err := cli.Get(u)
+	if err != nil {
+		return fmt.Errorf("healthcheck %s: %w", u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthcheck %s: status %d", u, resp.StatusCode)
+	}
 	return nil
 }

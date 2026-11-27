@@ -154,5 +154,5 @@ ssh server 'sudo install -o mt -g mt -m 755 /tmp/mt.new /opt/mt/mt && sudo syste
      - `version` 填写指定版本号（如 `v1.2.0` 或 `1.2.0`）：校验格式与去重后直接按指定版本发布。
 
 3. **Docker 零配置运行**
-   - 容器内置 `MT_DB=/app/data/mt.db`、`MT_LISTEN=0.0.0.0:8080`、`TZ=Asia/Shanghai` 与 `/healthz` 健康检查，使用非 root 用户（UID/GID `1000`）运行。
-   - 首次启动无需 `config.yaml`，挂载 `./data:/app/data` 后打开 `http://<host>:8080` 即可初始化管理员口令并在 Web 设置页完成全部配置；完整 compose 示例见仓库根目录 `docker-compose.yml`。
+   - 镜像基于 `gcr.io/distroless/static-debian12:nonroot`（零 QEMU 构建、无 shell、自带 CA 证书、Go 二进制内嵌 `time/tzdata` 与 `mt healthcheck`），内置 `MT_DB=/app/data/mt.db`、`MT_LISTEN=0.0.0.0:8080`、`TZ=Asia/Shanghai`，以非 root 用户（UID/GID `65532`）运行。
+   - 首次启动无需 `config.yaml`，挂载 `./data:/app/data`（宿主机目录可提前 `chown -R 65532:65532 ./data`）后打开 `http://<host>:8080` 即可初始化管理员口令并在 Web 设置页完成全部配置；完整 compose 示例见仓库根目录 `docker-compose.yml`。

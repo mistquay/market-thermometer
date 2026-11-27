@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# 标准三阶段多架构构建（可在任意机器或 CI 独立执行 docker build）：
+# 标准三阶段多架构构建（零 QEMU，最终镜像基于 distroless/static:nonroot）：
 #   Stage 1: 构建 React + Vite 前端产物 -> internal/webui/dist
-#   Stage 2: 嵌入前端产物，纯 Go 静态编译目标架构二进制
-#   Stage 3: 最小化 Alpine 运行镜像（非 root + 证书 + 时区 + 健康检查）
+#   Stage 2: 嵌入前端产物与时区库，纯 Go 静态交叉编译目标架构二进制并预备 rootfs
+#   Stage 3: 最小化 distroless/static-debian12:nonroot（自带 CA 证书、非 root 65532、零 shell）
 
 FROM --platform=$BUILDPLATFORM node:24-alpine AS web-builder
 WORKDIR /src/web
@@ -24,22 +24,19 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY --from=web-builder /src/internal/webui/dist ./internal/webui/dist
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath \
-    -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
-    -o /out/mt ./cmd/mt
+RUN mkdir -p /rootfs/app/data /rootfs/usr/local/bin \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+       go build -trimpath \
+       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+       -o /rootfs/usr/local/bin/mt ./cmd/mt \
+    && chmod 755 /rootfs/usr/local/bin/mt \
+    && chown -R 65532:65532 /rootfs/app
 
-FROM alpine:3.21 AS runtime
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -g 1000 -S mt \
-    && adduser -u 1000 -S -G mt -h /app mt \
-    && mkdir -p /app/data \
-    && chown -R mt:mt /app
-
-COPY --from=go-builder --chmod=755 /out/mt /usr/local/bin/mt
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+COPY --from=go-builder /rootfs/ /
 
 WORKDIR /app
-USER mt
+USER nonroot:nonroot
 
 ENV TZ=Asia/Shanghai \
     MT_DB=/app/data/mt.db \
@@ -49,7 +46,7 @@ EXPOSE 8080
 VOLUME ["/app/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
+    CMD ["/usr/local/bin/mt", "healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/mt"]
 CMD ["serve"]
