@@ -13,6 +13,7 @@ sources:
   # 未列出的指标按"所有提供它的插件"路由。
   routes:
     cn.hs300.close:       [csindex, eastmoney]   # 收盘价各源一致，可回退；东财 K 线易被封 IP，放在后面
+    cn.hs300.tr_close:    [csindex]              # 沪深300全收益指数（H00300，含分红再投）
     cn.hs300.pe_ttm:      [csindex]
     cn.bond.y10:          [eastmoney]
     cn.csiall.amount:     [csindex]
@@ -85,3 +86,4 @@ polymarket:
   strategy:                       # 短期涨跌盘公允概率策略（需要 book）
     shadow: true                   # 影子模式：每轮采集后计算 P(Up)，与盘口比较，只记录信号、不下单
     min_edge: 0.03                 # 记录信号的最小预期收益（每股美元，已扣手续费）
+    df: 0                          # Student-t 肥尾自由度（0 = 正态；推荐 5–8 缓解加密短周期极端反转过自信）

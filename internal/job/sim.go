@@ -15,10 +15,24 @@ import (
 	"market-thermometer/internal/store"
 )
 
+// SimStats 是模拟账户的绩效统计指标。
+type SimStats struct {
+	TotalRet     float64  `json:"totalRet"`
+	CAGR         *float64 `json:"cagr"`
+	Vol          *float64 `json:"vol"`
+	MaxDD        float64  `json:"maxDD"`
+	Sharpe       *float64 `json:"sharpe"`
+	BenchRet     *float64 `json:"benchRet"`
+	ExcessRet    *float64 `json:"excessRet"`
+	FilledOrders int      `json:"filledOrders"`
+	TradingDays  int      `json:"tradingDays"`
+}
+
 // SimView 是一个模拟账户回放后的完整视图。
 type SimView struct {
 	Account store.SimAccount  `json:"account"`
 	State   sim.State         `json:"state"`
+	Stats   SimStats          `json:"stats"`
 	Orders  []sim.Order       `json:"orders"`
 	Bench   []float64         `json:"bench"` // 与 State.Curve 对齐的沪深300 收盘价
 	Names   map[string]string `json:"names"`
@@ -93,6 +107,7 @@ func LoadSim(ctx context.Context, st *store.Store, hub *ds.Hub, mkt market.Marke
 	for _, p := range state.Curve {
 		v.Bench = append(v.Bench, benchAt[p.Date])
 	}
+	v.Stats = computeSimStats(acc.Cash, state.Equity, state.Curve, v.Bench, updated)
 	var items []store.Security
 	seen := map[string]bool{}
 	for _, o := range updated {
@@ -264,4 +279,65 @@ func ThermometerPosition(ctx context.Context, st *store.Store, hub *ds.Hub, mkt 
 	sp.Base = p.Position.Base(last.Tier)
 	sp.Weight = math.Max(0, math.Min(1, sp.Base+sp.Overlay))
 	return sp, nil
+}
+
+func computeSimStats(initCash, equity float64, curve []sim.Point, bench []float64, orders []sim.Order) SimStats {
+	st := SimStats{TradingDays: len(curve)}
+	if initCash > 0 {
+		st.TotalRet = equity/initCash - 1
+	}
+	for _, o := range orders {
+		if o.Status == sim.StatusFilled {
+			st.FilledOrders++
+		}
+	}
+	if len(curve) < 2 {
+		return st
+	}
+	peak := curve[0].Equity
+	var rets []float64
+	for i, pt := range curve {
+		if pt.Equity > peak {
+			peak = pt.Equity
+		}
+		if peak > 0 {
+			dd := pt.Equity/peak - 1
+			if dd < st.MaxDD {
+				st.MaxDD = dd
+			}
+		}
+		if i > 0 && curve[i-1].Equity > 0 {
+			rets = append(rets, pt.Equity/curve[i-1].Equity-1)
+		}
+	}
+	n := len(rets)
+	if n >= 5 && initCash > 0 && equity > 0 {
+		cagr := math.Pow(equity/initCash, 252.0/float64(n)) - 1
+		st.CAGR = &cagr
+		mean := 0.0
+		for _, r := range rets {
+			mean += r
+		}
+		mean /= float64(n)
+		var vsum float64
+		for _, r := range rets {
+			d := r - mean
+			vsum += d * d
+		}
+		if n > 1 && vsum > 0 {
+			vol := math.Sqrt(vsum/float64(n-1)) * math.Sqrt(252)
+			st.Vol = &vol
+			if vol > 1e-9 {
+				sh := (cagr - 0.02) / vol
+				st.Sharpe = &sh
+			}
+		}
+	}
+	if len(bench) == len(curve) && bench[0] > 0 && bench[len(bench)-1] > 0 {
+		br := bench[len(bench)-1]/bench[0] - 1
+		ex := st.TotalRet - br
+		st.BenchRet = &br
+		st.ExcessRet = &ex
+	}
+	return st
 }

@@ -67,7 +67,7 @@ func TestPMShadow(t *testing.T) {
 		t.Fatalf("basis %v n %v", s.Basis, s.BasisN)
 	}
 	e := s.Evals[0]
-	if !e.OK || e.KSrc != "spot" || math.Abs(e.K/k-1) > 3e-5 || e.P < 0.9 || e.Tau != 180 {
+	if !e.OK || e.KSrc != "spot" || math.Abs(e.K/k-1) > 3e-5 || e.P < 0.8 || e.Tau != 180 {
 		t.Fatalf("eval %+v", e)
 	}
 	if s.Evals[1].OK || s.Evals[1].Reason != "未开始" {

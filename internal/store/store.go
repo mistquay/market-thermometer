@@ -171,6 +171,14 @@ func OpenWithTick(path, tickPath string) (*Store, error) {
 		closeAll()
 		return nil, fmt.Errorf("migrate notes: %w", err)
 	}
+	if err := st.migratePMWhale(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate pm whale: %w", err)
+	}
+	if err := st.migrateStockWatch(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate stock watch: %w", err)
+	}
 	if err := st.migrateLegacyPMBookToTick(); err != nil {
 		closeAll()
 		return nil, fmt.Errorf("migrate pm tick split: %w", err)
@@ -259,6 +267,16 @@ func (s *Store) LastDate(ctx context.Context, metric ds.MetricID) (string, error
 	var d sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(trade_date) FROM raw_metric WHERE metric=?`, string(metric)).Scan(&d)
 	return d.String, err
+}
+
+// LatestPoint 返回某指标在库中的最新数据点（按交易日降序）。
+func (s *Store) LatestPoint(ctx context.Context, metric ds.MetricID) (ds.Point, bool, error) {
+	var p ds.Point
+	err := s.db.QueryRowContext(ctx, `SELECT trade_date, value FROM raw_metric WHERE metric=? ORDER BY trade_date DESC LIMIT 1`, string(metric)).Scan(&p.Date, &p.Value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, false, nil
+	}
+	return p, err == nil, err
 }
 
 // Series 返回某指标某来源在 [from, to] 的数据点（日期为空表示不限）。

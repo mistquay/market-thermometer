@@ -30,10 +30,20 @@ type Source struct {
 
 func (s *Source) Name() string { return Name }
 func (s *Source) Provides() []ds.MetricID {
-	return []ds.MetricID{ds.CNHS300PE, ds.CNHS300Close, ds.CNCSIAllAmount}
+	return []ds.MetricID{ds.CNHS300PE, ds.CNHS300Close, ds.CNHS300TRClose, ds.CNCSIAllAmount}
 }
 
 const perfURL = "https://www.csindex.com.cn/csindex-home/perf/index-perf?indexCode=%s&startDate=%s&endDate=%s"
+
+// FetchPerf 拉取中证官网任意指数在 [from, to] 的每日收盘价、市盈率与成交额。
+func FetchPerf(ctx context.Context, client *http.Client, code string, from, to time.Time) ([]Row, error) {
+	u := fmt.Sprintf(perfURL, code, from.Format("20060102"), to.Format("20060102"))
+	body, err := ds.GetBody(ctx, client, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("csindex perf %s: %w", code, err)
+	}
+	return ParsePerf(body)
+}
 
 func (s *Source) Fetch(ctx context.Context, m ds.MetricID, from, to time.Time) ([]ds.Point, error) {
 	var (
@@ -45,6 +55,8 @@ func (s *Source) Fetch(ctx context.Context, m ds.MetricID, from, to time.Time) (
 		code, pick = "000300", func(r Row) *float64 { return r.PE }
 	case ds.CNHS300Close:
 		code, pick = "000300", func(r Row) *float64 { return r.Close }
+	case ds.CNHS300TRClose:
+		code, pick = "H00300", func(r Row) *float64 { return r.Close }
 	case ds.CNCSIAllAmount:
 		code, pick = "000985", func(r Row) *float64 {
 			if r.TradingValue == nil {
@@ -56,12 +68,7 @@ func (s *Source) Fetch(ctx context.Context, m ds.MetricID, from, to time.Time) (
 	default:
 		return nil, fmt.Errorf("csindex: unsupported metric %s", m)
 	}
-	u := fmt.Sprintf(perfURL, code, from.Format("20060102"), to.Format("20060102"))
-	body, err := ds.GetBody(ctx, s.http, u, nil)
-	if err != nil {
-		return nil, fmt.Errorf("csindex perf %s: %w", code, err)
-	}
-	rows, err := ParsePerf(body)
+	rows, err := FetchPerf(ctx, s.http, code, from, to)
 	if err != nil {
 		return nil, err
 	}

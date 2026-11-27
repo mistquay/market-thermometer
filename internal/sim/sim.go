@@ -19,19 +19,21 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	ds "market-thermometer/internal/datasource"
 )
 
 // Params 是交易参数。
 type Params struct {
-	CommissionRate float64 `json:"commissionRate"` // 佣金费率，0.00025 = 万 2.5
-	MinCommission  float64 `json:"minCommission"`  // 最低佣金（元）
-	StampDuty      float64 `json:"stampDuty"`      // 印花税（股票卖出），0.0005 = 万 5
-	SlippageBps    float64 `json:"slippageBps"`    // 滑点（基点），买入价上浮、卖出价下浮
-	LotSize        int     `json:"lotSize"`        // 每手股数
-	ExpireDays     int     `json:"expireDays"`     // 委托提交后最多等待的交易日数
-	MaxOrderAmount float64 `json:"maxOrderAmount"` // 单笔委托金额上限（元），0 为不限（风控）
+	CommissionRate  float64 `json:"commissionRate"`  // 佣金费率，0.00025 = 万 2.5
+	MinCommission   float64 `json:"minCommission"`   // 最低佣金（元）
+	StampDuty       float64 `json:"stampDuty"`       // 印花税（股票卖出），0.0005 = 万 5
+	SlippageBps     float64 `json:"slippageBps"`     // 滑点（基点），买入价上浮、卖出价下浮
+	LotSize         int     `json:"lotSize"`         // 每手股数
+	ExpireDays      int     `json:"expireDays"`      // 委托提交后最多等待的交易日数
+	MaxOrderAmount  float64 `json:"maxOrderAmount"`  // 单笔委托金额上限（元），0 为不限（风控）
+	CheckPriceLimit bool    `json:"checkPriceLimit"` // 涨跌停不可成交约束（主板 ±9.8%，创业/科创 ±19.8%）
 }
 
 // DefaultParams 是常见 A 股零售费率。
@@ -137,12 +139,18 @@ func Replay(in Input) ([]Order, State) {
 	orders := append([]Order(nil), in.Orders...)
 	sort.Slice(orders, func(i, j int) bool { return orders[i].ID < orders[j].ID })
 	bar := map[string]map[string]ds.StockBar{}
+	prevClose := map[string]map[string]float64{}
 	for code, bs := range in.Bars {
 		m := make(map[string]ds.StockBar, len(bs))
-		for _, b := range bs {
+		pm := make(map[string]float64, len(bs))
+		for idx, b := range bs {
 			m[b.Date] = b
+			if idx > 0 {
+				pm[b.Date] = bs[idx-1].Close
+			}
 		}
 		bar[code] = m
+		prevClose[code] = pm
 	}
 	cash := in.Cash
 	ps := map[string]*pos{}
@@ -178,6 +186,27 @@ func Replay(in Input) ([]Order, State) {
 						o.Status, o.Reason = StatusExpired, fmt.Sprintf("提交后 %d 个交易日没有该证券的日线（停牌或本地缺数），已过期", waited[i])
 					}
 					continue
+				}
+				if in.Params.CheckPriceLimit {
+					if prev := prevClose[o.Code][d]; prev > 0 {
+						mult := b.Mult
+						if mult <= 0 {
+							mult = 1
+						}
+						chg := b.Close*mult/prev - 1
+						lim := priceLimitOf(o.Code)
+						if (o.Side == Buy && chg >= lim) || (o.Side == Sell && chg <= -lim) {
+							waited[i]++
+							if waited[i] >= in.Params.ExpireDays {
+								dirText := "涨停无法买入"
+								if o.Side == Sell {
+									dirText = "跌停无法卖出"
+								}
+								o.Status, o.Reason = StatusExpired, fmt.Sprintf("连续 %d 个交易日%s，已过期", waited[i], dirText)
+							}
+							continue
+						}
+					}
 				}
 				if reason := match(o, b, d, cash, ps, in.Params); reason != "" {
 					o.Status, o.Reason, o.FillDate = StatusRejected, reason, d
@@ -287,4 +316,11 @@ func applyFill(ps map[string]*pos, o *Order) (cashDelta, realized float64) {
 func round(x float64, digits int) float64 {
 	f := math.Pow(10, float64(digits))
 	return math.Round(x*f) / f
+}
+
+func priceLimitOf(code string) float64 {
+	if strings.HasPrefix(code, "300") || strings.HasPrefix(code, "301") || strings.HasPrefix(code, "688") || strings.HasPrefix(code, "689") {
+		return 0.198
+	}
+	return 0.098
 }

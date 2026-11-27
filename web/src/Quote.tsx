@@ -38,9 +38,14 @@ function fromHash(): { kind: string; code: string } | null {
   return m ? { kind: m[1], code: m[2] } : null
 }
 
+type FillItem = {
+  id: number; accountId: number; accountName: string; side: 'buy' | 'sell'; fillDate: string; fillPrice: number; qty: number; amount: number; note?: string
+}
+
 export default function Quote() {
   const [target, setTarget] = useState(fromHash)
   const [data, setData] = useState<SecuritySeries | null>(null)
+  const [fills, setFills] = useState<FillItem[]>([])
   const [mode, setMode] = useState<'qfq' | 'hfq' | 'none'>('qfq')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SecurityHit[]>([])
@@ -66,10 +71,14 @@ export default function Quote() {
   useEffect(() => {
     if (!target) return
     setError('')
+    setFills([])
     api.securitySeries(target.kind, target.code).then(setData, (e) => {
       setData(null)
       setError(e.message)
     })
+    if (target.kind === 'stock' || target.kind === 'fund') {
+      api.securityFills(target.kind, target.code).then(setFills, () => {})
+    }
   }, [target])
 
   useEffect(() => {
@@ -393,6 +402,48 @@ export default function Quote() {
               没有扩展数据（K 线、成交量、估值）：可在「数据同步」页回填扩展字段，或运行 <code className="mono">mt ext-backfill</code>。
             </p>
           )}
+        </section>
+      )}
+
+      {data && fills.length > 0 && (
+        <section className="panel overflow-hidden">
+          <div className="panel-head border-b border-[var(--line)]">
+            <strong>模拟盘成交复盘（{fills.length} 笔）</strong>
+            <span className="muted text-xs">来自本地 A 股模拟盘已成交委托</span>
+            <a href="#/sim" className="btn btn-ghost text-xs" style={{ marginLeft: 'auto' }}>
+              前往模拟盘 →
+            </a>
+          </div>
+          <div className="table-scroll">
+            <table className="table static">
+              <thead>
+                <tr>
+                  <th>成交日</th>
+                  <th>账户</th>
+                  <th>方向</th>
+                  <th className="num">成交价</th>
+                  <th className="num">数量</th>
+                  <th className="num">金额</th>
+                  <th>备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fills.map((fl) => (
+                  <tr key={fl.id}>
+                    <td className="mono small">{fl.fillDate}</td>
+                    <td className="small">{fl.accountName}</td>
+                    <td>
+                      <span className={`tag ${fl.side === 'buy' ? 'tag-hot' : 'tag-cold'}`}>{fl.side === 'buy' ? '买入' : '卖出'}</span>
+                    </td>
+                    <td className="num mono small">{fl.fillPrice.toFixed(3)}</td>
+                    <td className="num mono small">{fl.qty.toLocaleString('zh-CN')}</td>
+                    <td className="num mono small">{fl.amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</td>
+                    <td className="muted small">{fl.note || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 

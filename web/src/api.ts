@@ -102,7 +102,17 @@ export type HStat = { n: number; median: Num; mean: Num; winRate: Num }
 export type BtGroup = { source: string; side: number; period: 'all' | 'in' | 'out'; n: number; horizons: HStat[]; maeMedian: Num }
 export type BtSignal = SignalEvent & { source: string; side: number; rets: Num[]; mae: Num }
 export type BtStrategy = { name: string; label: string; totalRet: number; cagr: number; maxDD: number; exposure: number; switches: number; equity: number[]; position?: number[] }
-export type BtConfig = { from: string; to: string; split: string; horizons: number[]; maeWindow: number }
+export type BtConfig = { from: string; to: string; split: string; horizons: number[]; maeWindow: number; costBps?: number }
+export type AblationPeriod = {
+  thermoRet: number; thermoDD: number; layeredRet: number; layeredDD: number; valRet: number; holdRet: number; buys: number; sells: number
+}
+export type AblationRow = { key: string; label: string; desc: string; params: FullParams; all: AblationPeriod; in: AblationPeriod; out: AblationPeriod }
+export type AblationResp = { from: string; split: string; costBps: number; rows: AblationRow[]; elapsedMs: number }
+export type RadarRow = {
+  code: string; name: string; style: string; isTR?: boolean; date: string; close: number
+  pe: Num; erp: Num; pePct5Y: Num; pePct10Y: Num; ret20d: Num; ret60d: Num; ret250d: Num; ma200Dist: Num; tier: string; error?: string
+}
+export type RadarResp = { asOf: string; bondY10: Num; bondDate?: string; trSpread1y?: Num; trSpread5y?: Num; items: RadarRow[] }
 export type BtResult = {
   config: BtConfig
   from: string
@@ -216,9 +226,10 @@ export type PortfolioAnalysis = {
 export type ScreenerRow = {
   code: string; kind: 'stock' | 'fund'; name: string; date: string; close: number
   ret20: number | null; ret60: number | null; aboveMa200: boolean | null; distMa200: number | null
-  peTtm: number | null; pb: number | null; totalMv: number | null; amount: number | null
+  peTtm: number | null; pb: number | null; pePct5Y: number | null; pbPct5Y: number | null
+  totalMv: number | null; amount: number | null; watched?: boolean
 }
-export type ScreenerResp = { asOf: string; universe: number; total: number; elapsedMs: number; items: ScreenerRow[] }
+export type ScreenerResp = { asOf: string; universe: number; total: number; watched?: number; elapsedMs: number; items: ScreenerRow[] }
 export type ResearchNote = { id: number; target: string; title: string; content: string; tags: string; createdAt: string; updatedAt: string }
 
 export type SecuritySeries = {
@@ -228,16 +239,23 @@ export type SecuritySeries = {
   peTtm?: (number | null)[]; pb?: (number | null)[]; extFrom?: string
 }
 
-export type SimParams = { commissionRate: number; minCommission: number; stampDuty: number; slippageBps: number; lotSize: number; expireDays: number; maxOrderAmount: number }
+export type SimParams = {
+  commissionRate: number; minCommission: number; stampDuty: number; slippageBps: number; lotSize: number
+  expireDays: number; maxOrderAmount: number; checkPriceLimit?: boolean
+}
 export type SimAccount = { id: number; name: string; cash: number; start: string; params: SimParams; note: string; createdAt: string }
 export type SimOrder = {
   id: number; code: string; kind: string; side: 'buy' | 'sell'; qty: number; placedDate: string; source: string; note?: string
   status: 'pending' | 'filled' | 'rejected' | 'expired' | 'canceled'; fillDate?: string; fillPrice?: number; amount?: number; fee?: number; reason?: string
 }
 export type SimPosition = { code: string; kind: string; qty: number; cost: number; price: number; priceDate: string; value: number; pnl: number }
+export type SimStats = {
+  totalRet: number; cagr: Num; vol: Num; maxDD: number; sharpe: Num; benchRet: Num; excessRet: Num; filledOrders: number; tradingDays: number
+}
 export type SimView = {
   account: SimAccount
   state: { cash: number; positions: SimPosition[] | null; equity: number; realized: number; fees: number; curve: { date: string; equity: number; cash: number }[] | null; asOf: string }
+  stats?: SimStats
   orders: SimOrder[]
   bench: number[] | null
   names: Record<string, string>
@@ -333,13 +351,15 @@ export type PMReplayTrade = {
   pnl: number; won: boolean; status: string; skipReason: string; bookSource: string
 }
 export type PMEvalConfig = {
-  days?: number; minEdge: number; kSrc: string; series: string; firstPerMarket: boolean
+  days?: number; minEdge: number; askMin?: number; askMax?: number; kSrc: string; series: string; firstPerMarket: boolean
+  execMode: 'taker' | 'maker'; makerOffset?: number
   delayMs: number; heartbeatMs: number; clusterMin: number; initialCash: number
   sizing: 'fixed' | 'kelly'; orderUsd: number; kellyFrac: number; maxAssetUsd: number; useFairLimit: boolean
 }
 export type PMEvalReport = {
   config: PMEvalConfig; rawSignals: number; filteredSignals: number; uniqueMarkets: number; clusters: number
   overall: PMBucketStat; byKSrc: PMBucketStat[]; bySeries: PMBucketStat[]; byTau: PMBucketStat[]
+  byEdge: PMBucketStat[]; byAsk: PMBucketStat[]
   calibration: PMCalibBin[]
   replay: {
     executed: number; wins: number; losses: number; winRate: number
@@ -362,7 +382,19 @@ export type PMArbOpp = {
   kind: 'binary' | 'negrisk'; slug: string; title: string; series?: string; shares: number
   rawSumAsk: number; totalCost: number; payout: number; netProfit: number; netPerUnit: number; roi: number; legs: PMArbLeg[]
 }
-export type PMArbResp = { scannedEvents: number; scannedTokens: number; targetShares: number; at: string; opportunities: PMArbOpp[] }
+export type PMArbHit = {
+  at: string; kind: 'binary' | 'negrisk'; slug: string; title: string; shares: number
+  rawSumAsk: number; netPerUnit: number; netProfit: number
+}
+export type PMArbResp = {
+  scannedEvents: number; scannedTokens: number; targetShares: number; discover?: boolean
+  at: string; opportunities: PMArbOpp[]; positiveCount?: number; history?: PMArbHit[]
+}
+export type PMWhale = { address: string; label: string; note?: string; createdAt?: string }
+export type PMTrade = {
+  wallet: string; name?: string; whaleLabel?: string; side: string; tokenId: string; conditionId: string
+  size: number; price: number; usdc: number; timestamp: number; title: string; slug: string; eventSlug: string; outcome: string; txHash?: string
+}
 export type PMExecConfig = {
   mode: 'shadow' | 'hitl' | 'auto_sim'; accountId: number; sizing: 'fixed' | 'kelly'; orderUsd: number
   kellyFrac: number; kSrc: string; minEdge: number; ttlSec: number; notify: boolean
@@ -406,16 +438,19 @@ export const api = {
   startBreadth: (full: boolean) => request<JobStatus>('POST', '/api/jobs/breadth', { full }),
   currentJob: () => request<JobStatus | null>('GET', '/api/jobs/current'),
   overview: () => request<Overview>('GET', '/api/overview'),
+  radar: (refresh = false) => request<RadarResp>('GET', `/api/radar${refresh ? '?refresh=1' : ''}`),
   scores: (from = '', to = '') =>
     request<ScoreSeries>('GET', `/api/scores?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   signals: () => request<SignalsResp>('GET', '/api/signals'),
   params: () => request<ParamsResp>('GET', '/api/params'),
   saveParams: (name: string, params: FullParams, activate: boolean) =>
     request<{ version: string }>('POST', '/api/params', { name, params, activate }),
-  backtest: (params: FullParams | null, config: { from: string; split: string }) =>
+  backtest: (params: FullParams | null, config: { from: string; split: string; costBps?: number }) =>
     request<BacktestResp>('POST', '/api/backtest', { params: params ?? undefined, config }),
-  robust: (params: FullParams | null, config: { from: string; split: string }) =>
+  robust: (params: FullParams | null, config: { from: string; split: string; costBps?: number }) =>
     request<RobustResp>('POST', '/api/backtest/robust', { params: params ?? undefined, config }),
+  ablation: (params: FullParams | null, config: { from: string; split: string; costBps?: number }) =>
+    request<AblationResp>('POST', '/api/backtest/ablation', { params: params ?? undefined, config }),
   funds: () => request<{ watched: WatchedFund[]; infoCount: number; configured: boolean }>('GET', '/api/funds'),
   searchFunds: (q: string) => request<FundInfo[]>('GET', `/api/funds/search?q=${encodeURIComponent(q)}`),
   watchFund: (code: string) => request<{ ok: boolean }>('POST', '/api/funds/watch', { code }),
@@ -437,6 +472,18 @@ export const api = {
     request<PortfolioAnalysis>('GET', `/api/portfolios/${id}/analysis?rebalance=${encodeURIComponent(rebalance)}&dca=${dca}`),
   screener: (params: Record<string, string>) =>
     request<ScreenerResp>('GET', `/api/screener?${new URLSearchParams(params).toString()}`),
+  watchStock: (kind: string, code: string) => request<{ ok: boolean }>('POST', '/api/stocks/watch', { kind, code }),
+  unwatchStock: (kind: string, code: string) => request<{ ok: boolean }>('DELETE', `/api/stocks/watch/${encodeURIComponent(kind)}/${encodeURIComponent(code)}`),
+  securityFills: (kind: string, code: string) =>
+    request<{ id: number; accountId: number; accountName: string; side: 'buy' | 'sell'; fillDate: string; fillPrice: number; qty: number; amount: number; note?: string }[]>(
+      'GET',
+      `/api/securities/${encodeURIComponent(kind)}/${encodeURIComponent(code)}/fills`,
+    ),
+  pmEventMarkers: (slug: string) =>
+    request<{
+      signals: PMSignal[]
+      orders: { id: number; accountName: string; time: string; outcome: number; outcomeName: string; side: string; shares: number; gross: number; avgPrice: number }[]
+    }>('GET', `/api/pm/events/${encodeURIComponent(slug)}/markers`),
   notes: (target = '', limit = 50) =>
     request<ResearchNote[]>('GET', `/api/notes?target=${encodeURIComponent(target)}&limit=${limit}`),
   saveNote: (n: { id?: number; target: string; title: string; content: string; tags: string }) =>
@@ -477,7 +524,19 @@ export const api = {
     request<{ points: PricePoint[]; source: string }>('GET', `/api/pm/prices?token=${encodeURIComponent(token)}&from=${from}&to=${to}&fidelity=${fidelity}`),
   pmSignals: (since = 0) => request<PMSignal[]>('GET', `/api/pm/signals?since=${since}`),
   pmEval: (cfg: Partial<PMEvalConfig>) => request<{ report: PMEvalReport; elapsedMs: number }>('POST', '/api/pm/eval', cfg),
-  pmArb: (shares = 50) => request<PMArbResp>('GET', `/api/pm/arb?shares=${shares}`),
+  pmArb: (shares = 50, discover = true, cached = false) =>
+    request<PMArbResp>('GET', `/api/pm/arb?shares=${shares}&discover=${discover ? 1 : 0}&cached=${cached ? 1 : 0}`),
+  pmWhales: () => request<PMWhale[]>('GET', '/api/pm/whales'),
+  pmWhaleSave: (w: { address: string; label?: string; note?: string }) => request<{ ok: boolean }>('POST', '/api/pm/whales', w),
+  pmWhaleDelete: (addr: string) => request<{ ok: boolean }>('DELETE', `/api/pm/whales/${encodeURIComponent(addr)}`),
+  pmTrades: (params: { user?: string; cond?: string; minUsd?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.user) q.set('user', params.user)
+    if (params.cond) q.set('cond', params.cond)
+    if (params.minUsd) q.set('minUsd', String(params.minUsd))
+    if (params.limit) q.set('limit', String(params.limit))
+    return request<PMTrade[]>('GET', `/api/pm/trades?${q.toString()}`)
+  },
   pmExec: () => request<PMExecConfig>('GET', '/api/pm/exec'),
   pmExecSave: (cfg: PMExecConfig) => request<PMExecConfig>('POST', '/api/pm/exec', cfg),
   pmProposals: () => request<PMProposal[]>('GET', '/api/pm/proposals'),

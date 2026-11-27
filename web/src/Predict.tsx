@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, ArrowLeft, ExternalLink, FlaskConical, Layers, Radio, RefreshCw, Scale, Search, Star, Wallet, X } from 'lucide-react'
-import { api, type Book, type BookSnap, type PMAccountView, type PMEvent, type PMMarket, type PMState, type PricePoint } from './api'
+import { api, type Book, type BookSnap, type PMAccountView, type PMEvent, type PMMarket, type PMSignal, type PMState, type PricePoint } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { useTheme } from './theme'
 import { AccountPage, OrderTicket, ShadowPanel, SimPanel } from './PMSim'
@@ -61,6 +61,9 @@ export default function Predict() {
 function Home() {
   const [state, setState] = useState<PMState | null>(null)
   const [simSummary, setSimSummary] = useState<{ accounts: PMAccountView[]; globalHalt: boolean } | null>(null)
+  const [sseLive, setSseLive] = useState(false)
+  const [pendingProposals, setPendingProposals] = useState(0)
+  const [arbPositive, setArbPositive] = useState(0)
   const [tab, setTab] = useState<HomeTab>('markets')
   const [series, setSeries] = useState('')
   const [upcoming, setUpcoming] = useState<PMEvent[]>([])
@@ -77,6 +80,38 @@ function Home() {
   useEffect(() => {
     load()
   }, [load])
+
+  // SSE 实时流：持续更新影子策略、盘口状态、待批提案与正套利计数，无需手工刷新
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return
+    const es = new EventSource('/api/stream')
+    es.onopen = () => setSseLive(true)
+    es.onerror = () => setSseLive(false)
+    es.addEventListener('tick', (ev: MessageEvent) => {
+      setSseLive(true)
+      try {
+        const d = JSON.parse(ev.data) as {
+          pmShadow?: PMState extends { configured: true } ? PMState['shadow'] : never
+          pmBook?: { running: boolean; every: string; targets: unknown[]; ticks: number; books: number; spots: number; lastRun?: string; errors: number; wsEnabled?: boolean; wsSpotOk?: boolean; wsBookOk?: boolean }
+          pendingProposals?: number
+          arbPositive?: number
+        }
+        if (typeof d.pendingProposals === 'number') setPendingProposals(d.pendingProposals)
+        if (typeof d.arbPositive === 'number') setArbPositive(d.arbPositive)
+        setState((cur) => {
+          if (!cur || !cur.configured) return cur
+          return {
+            ...cur,
+            shadow: d.pmShadow ?? cur.shadow,
+            book: cur.book.configured && d.pmBook ? { ...cur.book, status: d.pmBook as typeof cur.book.status } : cur.book,
+          }
+        })
+      } catch {
+        // ignore malformed tick
+      }
+    })
+    return () => es.close()
+  }, [])
   useEffect(() => {
     if (state?.configured && !series && state.series.length) setSeries(state.series[0])
   }, [state, series])
@@ -339,6 +374,8 @@ function Home() {
         >
           <Scale className="h-4 w-4" />
           套利与人工审批
+          {pendingProposals > 0 && <span className="tag tag-warn">{pendingProposals} 待批</span>}
+          {arbPositive > 0 && <span className="tag tag-ok">{arbPositive} 套利</span>}
         </button>
         <button
           type="button"
@@ -351,6 +388,12 @@ function Home() {
           模拟盘与风控
           {simSummary && <span className="tag tag-muted">{simSummary.accounts.length}</span>}
         </button>
+        {sseLive && (
+          <span className="ml-auto hidden items-center gap-1.5 px-2 text-[11px] font-medium text-[var(--ok)] sm:inline-flex" title="SSE 实时推送已连接（每 2.5s 自动刷新）">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--ok)]" />
+            SSE 实时
+          </span>
+        )}
       </div>
 
       {/* Tab 1: 市场与事件 */}
@@ -519,6 +562,8 @@ function EventDetail({ slug }: { slug: string }) {
   const [priceSrc, setPriceSrc] = useState('')
   const [book, setBook] = useState<Book | null>(null)
   const [snaps, setSnaps] = useState<BookSnap[]>([])
+  const [evSignals, setEvSignals] = useState<PMSignal[]>([])
+  const [evOrders, setEvOrders] = useState<{ id: number; accountName: string; time: string; outcome: number; outcomeName: string; side: string; shares: number; gross: number; avgPrice: number }[]>([])
   const [error, setError] = useState('')
   const { theme } = useTheme()
 
@@ -527,12 +572,21 @@ function EventDetail({ slug }: { slug: string }) {
     setMi(0)
     setOi(0)
     setError('')
+    setEvSignals([])
+    setEvOrders([])
     api.pmEvent(slug).then(
       (r) => {
         setEv(r.event)
         setWatched(r.watched)
       },
       (e: Error) => setError(e.message),
+    )
+    api.pmEventMarkers(slug).then(
+      (r) => {
+        setEvSignals(r.signals ?? [])
+        setEvOrders(r.orders ?? [])
+      },
+      () => {},
     )
   }, [slug])
 
@@ -623,6 +677,32 @@ function EventDetail({ slug }: { slug: string }) {
       m && secs(m.start) > 0 && secs(m.end) - secs(m.start) <= 86400
         ? [{ xAxis: secs(m.start) * 1000, label: { formatter: '开始计价', color: ink } }]
         : []
+    const sigMarks = evSignals
+      .filter((s) => !m || s.conditionId === m.conditionId)
+      .map((s) => {
+        const y = s.outcome === oi ? s.ask : 1 - s.ask
+        const same = s.outcome === oi
+        return {
+          coord: [s.t, y],
+          symbol: 'triangle',
+          symbolSize: 10,
+          itemStyle: { color: same ? '#2563eb' : '#94a3b8' },
+          label: { show: false },
+          name: `策略信号 ${s.outcome === 0 ? 'Up' : 'Down'} · P ${(s.p * 100).toFixed(1)}% / 卖一 ${(s.ask * 100).toFixed(1)}¢ / Edge +${(s.edge * 100).toFixed(1)}¢`,
+        }
+      })
+    const ordMarks = evOrders.map((o) => {
+      const y = o.outcome === oi ? o.avgPrice : 1 - o.avgPrice
+      return {
+        coord: [new Date(o.time).getTime(), y],
+        symbol: 'diamond',
+        symbolSize: 11,
+        itemStyle: { color: o.side === 'buy' ? '#f59e0b' : '#ef4444' },
+        label: { show: false },
+        name: `模拟成交 [${o.accountName}] ${o.side === 'buy' ? '买入' : '卖出'} ${o.outcomeName} ${o.shares.toFixed(1)}份 @ ${(o.avgPrice * 100).toFixed(1)}¢`,
+      }
+    })
+    const allMarkPoints = [...sigMarks, ...ordMarks]
     return {
       animation: false,
       grid: { left: 54, right: 24, top: 32, bottom: 56 },
@@ -660,12 +740,20 @@ function EventDetail({ slug }: { slug: string }) {
           lineStyle: { width: 2, color: accent },
           itemStyle: { color: accent },
           markLine: marks.length ? { symbol: 'none', lineStyle: { color: ink, type: 'dashed' }, data: marks } : undefined,
+          markPoint: allMarkPoints.length
+            ? {
+                data: allMarkPoints,
+                tooltip: {
+                  formatter: (p: { name: string }) => p.name,
+                },
+              }
+            : undefined,
         },
         ...bookSeries,
       ],
       legend: bookSeries.length ? { top: 0, left: 54, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 } : undefined,
     }
-  }, [points, snaps, m, oi, theme])
+  }, [points, snaps, evSignals, evOrders, m, oi, theme])
 
   const toggleWatch = () => {
     const p = watched ? api.pmUnwatch(slug) : api.pmWatch(slug)
@@ -826,6 +914,8 @@ function EventDetail({ slug }: { slug: string }) {
                 <> · 起始价 <strong className="mono text-[var(--ink)]">{ev.priceToBeat.toFixed(2)}</strong>（Chainlink）</>
               )}
               {snaps.length > 0 && <> · 本地盘口快照 {snaps.length} 条</>}
+              {evSignals.length > 0 && <> · 策略信号 {evSignals.length} 条（图上 ▲）</>}
+              {evOrders.length > 0 && <> · 模拟成交 {evOrders.length} 笔（图上 ◆）</>}
               {m.winner >= 0 && <> · 结果 <strong className="text-[var(--ink)]">{m.outcomes[m.winner]}</strong></>}
             </p>
             {ev && <OrderTicket slug={ev.slug} m={m} outcome={oi} />}

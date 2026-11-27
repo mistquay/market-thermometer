@@ -42,6 +42,7 @@ type Polymarket struct {
 type PMStrat struct {
 	Shadow  bool    `yaml:"shadow"`
 	MinEdge float64 `yaml:"min_edge"` // 记录信号的最小预期收益（每股美元，已扣手续费），默认 0.03
+	DF      float64 `yaml:"df"`       // Student-t 自由度（默认 0 为正态分布；如设为 5 则启用厚尾校准）
 }
 
 // PMBook 是盘口采集配置：EveryMs 为 0 时不采集。

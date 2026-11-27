@@ -7,9 +7,13 @@ import { useTheme } from './theme'
 const DEFAULT_CFG: PMEvalConfig = {
   days: 14,
   minEdge: 0.03,
+  askMin: 0,
+  askMax: 0,
   kSrc: '',
   series: '',
   firstPerMarket: true,
+  execMode: 'taker',
+  makerOffset: 0,
   delayMs: 1000,
   heartbeatMs: 15000,
   clusterMin: 15,
@@ -253,6 +257,32 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
             <span>单资产敞口上限 ($)</span>
             <input type="number" className={inputCls} value={cfg.maxAssetUsd} min={0} onChange={(e) => setCfg({ ...cfg, maxAssetUsd: e.target.valueAsNumber || 0 })} />
           </label>
+          <label className="flex flex-col gap-1 text-xs text-[var(--ink-2)]">
+            <span>执行方式</span>
+            <select className={inputCls} value={cfg.execMode} onChange={(e) => setCfg({ ...cfg, execMode: e.target.value as 'taker' | 'maker' })}>
+              <option value="taker">吃单（Taker 扣费）</option>
+              <option value="maker">被动挂单（Maker 0费）</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[var(--ink-2)]">
+            <span>卖一区间过滤 (¢)</span>
+            <div className="flex gap-1">
+              <input
+                type="number"
+                className={`${inputCls} w-full`}
+                placeholder="最小"
+                value={cfg.askMin ? Math.round(cfg.askMin * 100) : ''}
+                onChange={(e) => setCfg({ ...cfg, askMin: (e.target.valueAsNumber || 0) / 100 })}
+              />
+              <input
+                type="number"
+                className={`${inputCls} w-full`}
+                placeholder="最大"
+                value={cfg.askMax ? Math.round(cfg.askMax * 100) : ''}
+                onChange={(e) => setCfg({ ...cfg, askMax: (e.target.valueAsNumber || 0) / 100 })}
+              />
+            </div>
+          </label>
           <label className="flex items-center gap-2 pt-4 text-xs text-[var(--ink)]">
             <input type="checkbox" checked={cfg.firstPerMarket} onChange={(e) => setCfg({ ...cfg, firstPerMarket: e.target.checked })} />
             每市场仅首条信号
@@ -343,7 +373,11 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
             </section>
           </div>
 
-          {/* 分层表：起始价来源 / 剩余时间 / 系列 */}
+          {/* 分层表：Edge 分桶 / 卖一价格分桶 / 起始价来源 / 剩余时间 / 系列 */}
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <BucketTable title="按 Edge 预期收益分桶（定位有效阈值）" rows={rep.byEdge ?? []} />
+            <BucketTable title="按卖一价格分桶（识别 40–60¢ 币抛区）" rows={rep.byAsk ?? []} />
+          </div>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <BucketTable title="按起始价来源拆分" rows={rep.byKSrc} labelOf={(k) => KSRC_LABEL[k] ?? k} />
             <BucketTable title="按剩余时间 τ 拆分" rows={rep.byTau} />

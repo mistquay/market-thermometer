@@ -38,6 +38,17 @@ func EvaluatePMSignals(ctx context.Context, st *store.Store, fromMs, toMs int64,
 			}
 			return ds.Book{Token: token, Bids: snap.Bids, Asks: snap.Asks}, true, nil
 		},
+		BooksInRange: func(token string, fromMs, toMs int64) ([]ds.Book, error) {
+			snaps, err := st.PMBooks(ctx, token, fromMs, toMs, 5000)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]ds.Book, 0, len(snaps))
+			for _, sn := range snaps {
+				out = append(out, ds.Book{Token: token, Bids: sn.Bids, Asks: sn.Asks})
+			}
+			return out, nil
+		},
 		LastSpotT: func(symbol string, atMs int64) (int64, bool, error) {
 			sp, ok, err := st.PMSpotBefore(ctx, symbol, atMs)
 			if err != nil || !ok {

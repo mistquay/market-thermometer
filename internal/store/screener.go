@@ -19,8 +19,11 @@ type ScreenerRow struct {
 	DistMA200  *float64 `json:"distMa200"`  // 相对 MA200 偏离度（小数）
 	PETTM      *float64 `json:"peTtm"`
 	PB         *float64 `json:"pb"`
+	PEPct5Y    *float64 `json:"pePct5Y"` // 近 5 年 PE 历史分位（0–100）
+	PBPct5Y    *float64 `json:"pbPct5Y"` // 近 5 年 PB 历史分位（0–100）
 	TotalMV    *float64 `json:"totalMv"` // 总市值（亿元）
 	Amount     *float64 `json:"amount"`  // 当日成交额（万元）
+	Watched    bool     `json:"watched,omitempty"`
 }
 
 // BuildScreenerSnapshot 扫描本地在市证券（股票与场内基金）的最新行情、均线位置与扩展估值字段。
@@ -74,6 +77,16 @@ func (s *Store) BuildScreenerSnapshot(ctx context.Context) ([]ScreenerRow, strin
 		return nil, "", err
 	}
 	defer valStmt.Close()
+	pctStmt, err := s.db.PrepareContext(ctx, `SELECT
+		COALESCE(SUM(CASE WHEN pe_ttm>0 AND pe_ttm<=? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN pe_ttm>0 THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN pb>0 AND pb<=? THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN pb>0 THEN 1 ELSE 0 END), 0)
+		FROM stock_daily_ext WHERE code=? AND d>=? AND d<=?`)
+	if err != nil {
+		return nil, "", err
+	}
+	defer pctStmt.Close()
 
 	out := make([]ScreenerRow, 0, len(metas))
 	type barPt struct{ c, m float64 }
@@ -157,6 +170,20 @@ func (s *Store) BuildScreenerSnapshot(ctx context.Context) ([]ScreenerRow, strin
 			if tmv.Valid && tmv.Float64 > 0 {
 				v := math.Round(tmv.Float64/1e8*100) / 100 // 元 → 亿元
 				row.TotalMV = &v
+			}
+			if (pe.Valid && pe.Float64 > 0) || (pb.Valid && pb.Float64 > 0) {
+				var peLE, peN, pbLE, pbN int
+				cutoff5y := m.lastD - 50000
+				if err := pctStmt.QueryRowContext(ctx, pe.Float64, pb.Float64, m.code, cutoff5y, m.lastD).Scan(&peLE, &peN, &pbLE, &pbN); err == nil {
+					if pe.Valid && pe.Float64 > 0 && peN >= 60 {
+						p := math.Round(float64(peLE)/float64(peN)*1000) / 10
+						row.PEPct5Y = &p
+					}
+					if pb.Valid && pb.Float64 > 0 && pbN >= 60 {
+						p := math.Round(float64(pbLE)/float64(pbN)*1000) / 10
+						row.PBPct5Y = &p
+					}
+				}
 			}
 		}
 		out = append(out, row)

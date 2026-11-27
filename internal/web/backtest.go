@@ -110,6 +110,9 @@ func (s *Server) backtestRequest(w http.ResponseWriter, r *http.Request) (p, act
 	cfg = backtest.DefaultConfig()
 	if req.Config != nil {
 		cfg.From, cfg.To, cfg.Split = req.Config.From, req.Config.To, req.Config.Split
+		if req.Config.CostBps > 0 {
+			cfg.CostBps = min(req.Config.CostBps, 200)
+		}
 		if _, err := time.Parse("2006-01-02", cfg.From); err != nil {
 			writeErr(w, http.StatusBadRequest, "回测起点日期格式应为 YYYY-MM-DD")
 			return
@@ -195,6 +198,50 @@ func (s *Server) runRobust(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"paramsVersion": p.Version(), "ratio": backtest.PerturbRatio, "from": cfg.From,
 		"base": base, "rows": rows, "years": backtest.Years(days, events, cfg),
+		"elapsedMs": time.Since(start).Milliseconds(),
+	})
+}
+
+// runAblation：维度与规则开关消融诊断（全区间 / 样本内 / 样本外），定位各维度真实贡献与失效因子。
+func (s *Server) runAblation(w http.ResponseWriter, r *http.Request) {
+	p, _, cfg, ok := s.backtestRequest(w, r)
+	if !ok {
+		return
+	}
+	start := time.Now()
+	ctx := r.Context()
+	cases := backtest.AblationCases(p)
+	rows := make([]backtest.AblationRow, 0, len(cases))
+	for _, cs := range cases {
+		if err := cs.Params.Validate(); err != nil {
+			continue
+		}
+		days, _, err := job.LoadDays(ctx, s.store, s.hub, market.CN, cs.Params)
+		if err != nil {
+			continue
+		}
+		_, events := engine.RunSignals(days, cs.Params.Signal)
+		cAll := cfg
+		cAll.Position = cs.Params.Position
+		cIn := cAll
+		cIn.To = cfg.Split
+		cOut := cAll
+		cOut.From = cfg.Split
+		rows = append(rows, backtest.AblationRow{
+			Key:    cs.Key,
+			Label:  cs.Label,
+			Desc:   cs.Desc,
+			Params: cs.Params,
+			All:    backtest.SummarizeAblation(backtest.Run(days, events, cAll)),
+			In:     backtest.SummarizeAblation(backtest.Run(days, events, cIn)),
+			Out:    backtest.SummarizeAblation(backtest.Run(days, events, cOut)),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"from":      cfg.From,
+		"split":     cfg.Split,
+		"costBps":   cfg.CostBps,
+		"rows":      rows,
 		"elapsedMs": time.Since(start).Milliseconds(),
 	})
 }

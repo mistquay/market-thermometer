@@ -95,10 +95,10 @@ function CreateForm({ defaults, onCancel, onCreated }: { defaults: SimParams; on
   const [start, setStart] = useState('')
   const [p, setP] = useState<SimParams>(defaults)
   const [error, setError] = useState('')
-  const num = (k: keyof SimParams, label: string, step: number, scale = 1, help = '') => (
+  const num = (k: Exclude<keyof SimParams, 'checkPriceLimit'>, label: string, step: number, scale = 1, help = '') => (
     <label className="field">
       <span>{label}</span>
-      <input type="number" step={step} value={+(p[k] * scale).toFixed(6)} onChange={(e) => setP({ ...p, [k]: (e.target.valueAsNumber || 0) / scale })} />
+      <input type="number" step={step} value={+(((p[k] as number) ?? 0) * scale).toFixed(6)} onChange={(e) => setP({ ...p, [k]: (e.target.valueAsNumber || 0) / scale })} />
       {help && <small className="muted">{help}</small>}
     </label>
   )
@@ -125,6 +125,14 @@ function CreateForm({ defaults, onCancel, onCreated }: { defaults: SimParams; on
         {num('lotSize', '每手股数', 100)}
         {num('expireDays', '委托有效期（交易日）', 1, 1, '停牌等原因超过这么多交易日未成交则过期')}
         {num('maxOrderAmount', '单笔金额上限（元，0 不限）', 10000, 1, '风控：超过则拒绝提交')}
+        <label className="field">
+          <span>涨跌停撮合约束</span>
+          <label className="flex items-center gap-2 text-xs text-[var(--ink)] pt-1.5">
+            <input type="checkbox" checked={!!p.checkPriceLimit} onChange={(e) => setP({ ...p, checkPriceLimit: e.target.checked })} />
+            启用（涨停不买、跌停不卖，顺延至次日）
+          </label>
+          <small className="muted">主板按 ±9.8%，创业板/科创板按 ±19.8% 判定</small>
+        </label>
       </div>
       {error && <div className="error" style={{ margin: '0 16px 12px' }}>{error}</div>}
       <div className="form-foot" style={{ padding: '0 16px 16px' }}>
@@ -170,11 +178,32 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
     }
   }, [curve, bench, a.cash, theme])
 
+  const st = view.stats
   const tiles: { k: string; v: string; sub: string; cls?: string }[] = [
-    { k: '总资产', v: money(s.equity), sub: `初始 ${money(a.cash)}` },
-    { k: '总收益', v: pct(ret, 2), sub: benchRet === null ? '' : `同期沪深300 ${pct(benchRet, 2)}`, cls: dir(ret) },
-    { k: '可用现金', v: money(s.cash), sub: `占比 ${pct(s.cash / s.equity).replace('+', '')}` },
-    { k: '已实现盈亏', v: money(s.realized), sub: `累计费用 ${money(s.fees)}`, cls: dir(s.realized) },
+    { k: '总资产', v: money(s.equity), sub: `初始 ${money(a.cash)} · 可用现金 ${money(s.cash)}` },
+    {
+      k: '总收益 / 超额',
+      v: pct(ret, 2),
+      sub:
+        st?.excessRet != null
+          ? `超额 ${pct(st.excessRet, 2)}（沪深300 ${pct(st.benchRet ?? 0, 2)}）`
+          : benchRet === null
+            ? ''
+            : `同期沪深300 ${pct(benchRet, 2)}`,
+      cls: dir(ret),
+    },
+    {
+      k: '年化 / 夏普',
+      v: st?.cagr != null ? pct(st.cagr, 1) : '—',
+      sub: st?.sharpe != null ? `夏普 ${st.sharpe.toFixed(2)} · 波动 ${pct(st.vol ?? 0, 1).replace('+', '')}` : `交易日 ${st?.tradingDays ?? curve.length} 天`,
+      cls: st?.cagr != null ? dir(st.cagr) : '',
+    },
+    {
+      k: '最大回撤 / 费用',
+      v: st ? pct(st.maxDD, 2) : '—',
+      sub: `已实现 ${money(s.realized)} · 成交 ${st?.filledOrders ?? 0} 笔 · 费 ${money(s.fees)}`,
+      cls: st && st.maxDD < -0.0005 ? 'down' : '',
+    },
   ]
   return (
     <>
@@ -185,6 +214,7 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
             {a.start} 起 · 回放到 {s.asOf || '—'}（撮合 {view.cutoff} 前日线）· 佣金万 {(a.params.commissionRate * 1e4).toFixed(1)}、最低 {a.params.minCommission} 元、
             印花税万 {(a.params.stampDuty * 1e4).toFixed(1)}、滑点 {a.params.slippageBps} bp
             {a.params.maxOrderAmount > 0 && `、单笔上限 ${money(a.params.maxOrderAmount)}`}
+            {a.params.checkPriceLimit && '、启用涨跌停约束'}
           </span>
           <span style={{ flex: 1 }} />
           <button className="btn btn-ghost" onClick={reload}>

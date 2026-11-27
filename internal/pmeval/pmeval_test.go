@@ -60,4 +60,28 @@ func TestEvaluateAndReplay(t *testing.T) {
 	if len(rep.Replay.Curve) != 2 {
 		t.Fatalf("curve len=%d", len(rep.Replay.Curve))
 	}
+	if len(rep.ByEdge) == 0 || len(rep.ByAsk) == 0 {
+		t.Fatalf("expected ByEdge/ByAsk breakdown")
+	}
+
+	// Maker 模式测试（0 手续费，需后续快照卖一穿越我方买一）
+	feed.BooksInRange = func(tok string, fromMs, toMs int64) ([]ds.Book, error) {
+		if tok == "t1" {
+			return []ds.Book{{Bids: []ds.BookLevel{{Price: 0.50, Size: 50}}, Asks: []ds.BookLevel{{Price: 0.52, Size: 50}}}}, nil
+		}
+		return nil, nil
+	}
+	feed.NextBook = func(tok string, atMs, endMs int64) (ds.Book, bool, error) {
+		if tok == "t1" {
+			return ds.Book{Bids: []ds.BookLevel{{Price: 0.53, Size: 50}}, Asks: []ds.BookLevel{{Price: 0.56, Size: 100}}}, true, nil
+		}
+		return ds.Book{}, false, nil
+	}
+	mcfg := DefaultConfig()
+	mcfg.ExecMode = "maker"
+	mcfg.OrderUSD = 20
+	mrep := Evaluate(sigs[:1], mcfg, feed)
+	if mrep.Replay.Executed != 1 || mrep.Replay.TotalFees != 0 || mrep.Replay.Wins != 1 {
+		t.Fatalf("maker replay %+v", mrep.Replay)
+	}
 }

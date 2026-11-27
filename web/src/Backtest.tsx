@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, FlaskConical, Play, RotateCcw, Save, ShieldCheck, SlidersHorizontal, TrendingUp } from 'lucide-react'
-import { api, type BacktestResp, type FullParams, type ParamsResp } from './api'
+import { ChevronDown, ChevronRight, FlaskConical, Layers, Play, RotateCcw, Save, ShieldCheck, SlidersHorizontal, TrendingUp } from 'lucide-react'
+import { api, type AblationResp, type BacktestResp, type FullParams, type ParamsResp } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct, TIER_TEXT } from './temperature'
 import { useTheme } from './theme'
@@ -9,7 +9,7 @@ import Robustness from './Robustness'
 
 type Field = { path: string; label: string; step?: number; hint?: string; bool?: boolean }
 type Group = { title: string; defaultOpen?: boolean; fields: Field[] }
-type TabKey = 'equity' | 'signals' | 'robust'
+type TabKey = 'equity' | 'signals' | 'robust' | 'ablation'
 
 const SCHEMA: Group[] = [
   {
@@ -115,7 +115,10 @@ export default function Backtest() {
   const [params, setParams] = useState<FullParams | null>(null)
   const [from, setFrom] = useState('2014-01-01')
   const [split, setSplit] = useState('2021-01-01')
+  const [costBps, setCostBps] = useState(0)
   const [res, setRes] = useState<BacktestResp | null>(null)
+  const [ablation, setAblation] = useState<AblationResp | null>(null)
+  const [ablationBusy, setAblationBusy] = useState(false)
   const [tab, setTab] = useState<TabKey>('equity')
   const [selectedStrat, setSelectedStrat] = useState<string>('layered')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
@@ -132,14 +135,29 @@ export default function Backtest() {
       setBusy(true)
       setError('')
       try {
-        setRes(await api.backtest(p, { from, split }))
+        setRes(await api.backtest(p, { from, split, costBps }))
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         setBusy(false)
       }
     },
-    [from, split],
+    [from, split, costBps],
+  )
+
+  const runAblation = useCallback(
+    async (p: FullParams | null) => {
+      setAblationBusy(true)
+      setError('')
+      try {
+        setAblation(await api.ablation(p, { from, split, costBps }))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setAblationBusy(false)
+      }
+    },
+    [from, split, costBps],
   )
 
   const loadMeta = useCallback(() => {
@@ -460,6 +478,10 @@ export default function Backtest() {
                 <span>样本外分界</span>
                 <input type="date" value={split} onChange={(e) => setSplit(e.target.value)} />
               </label>
+              <label className="field-inline" title="单边换手交易成本（基点，10 bps = 万分之十 = 0.1%）">
+                <span>交易成本 (bps)</span>
+                <input type="number" min={0} max={200} step={5} value={costBps} onChange={(e) => setCostBps(Math.max(0, e.target.valueAsNumber || 0))} />
+              </label>
             </div>
 
             {params && (
@@ -648,6 +670,19 @@ export default function Backtest() {
               <ShieldCheck className="h-4 w-4" />
               稳健性与相关性
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'ablation'}
+              className={`tab-btn ${tab === 'ablation' ? 'on' : ''}`}
+              onClick={() => {
+                setTab('ablation')
+                if (!ablation && !ablationBusy) runAblation(params)
+              }}
+            >
+              <Layers className="h-4 w-4" />
+              维度消融诊断
+            </button>
           </div>
 
           {r && r.days === 0 && <div className="panel empty">所选区间没有数据。</div>}
@@ -807,6 +842,100 @@ export default function Backtest() {
                 </section>
               )}
             </>
+          )}
+          {tab === 'ablation' && (
+            <section className="panel overflow-hidden">
+              <div className="panel-head border-b border-[var(--line)]">
+                <Layers className="h-4 w-4 text-[var(--accent)]" />
+                <strong>维度与规则开关消融诊断</strong>
+                <span className="muted text-xs">
+                  单维度、留一法与结构开关在样本内（&lt; {split}）及样本外（≥ {split}）的真实收益与回撤对照；点击“载入”可将对应方案直接填入左侧测试
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ marginLeft: 'auto' }}
+                  disabled={ablationBusy || !params}
+                  onClick={() => runAblation(params)}
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  {ablationBusy ? '消融计算中…' : '重跑消融'}
+                </button>
+              </div>
+              {ablation ? (
+                <>
+                  <div className="border-b border-[var(--line)] bg-[var(--bg-subtle)] px-5 py-2 text-xs text-[var(--ink-2)] mono">
+                    区间 {ablation.from} 起 · 样本外分界 {ablation.split} · 单边成本 {ablation.costBps} bps · 耗时 {ablation.elapsedMs} ms
+                    {ablation.rows[0] && (
+                      <>
+                        {' '}
+                        · 估值档基线 全区间 {pct(ablation.rows[0].all.valRet)}（样本外 {pct(ablation.rows[0].out.valRet)}）· 持有全区间{' '}
+                        {pct(ablation.rows[0].all.holdRet)}（样本外 {pct(ablation.rows[0].out.holdRet)}）
+                      </>
+                    )}
+                  </div>
+                  <div className="table-scroll">
+                    <table className="table static">
+                      <thead>
+                        <tr>
+                          <th>消融方案</th>
+                          <th className="num">全区间·温度计</th>
+                          <th className="num">全区间·分层</th>
+                          <th className="num">全区间回撤(分层)</th>
+                          <th className="num">样本内·温度计 / 分层</th>
+                          <th className="num">样本外·温度计 / 分层</th>
+                          <th className="num">买/卖信号</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ablation.rows.map((row) => (
+                          <tr key={row.key}>
+                            <td>
+                              <div className="font-medium text-[var(--ink)]">{row.label}</div>
+                              <div className="text-[11px] text-[var(--ink-3)]">{row.desc}</div>
+                            </td>
+                            <td className={`num mono font-semibold ${dirClass(row.all.thermoRet)}`}>{pct(row.all.thermoRet)}</td>
+                            <td className={`num mono font-semibold ${dirClass(row.all.layeredRet)}`}>{pct(row.all.layeredRet)}</td>
+                            <td className="num mono down">{pct(row.all.layeredDD)}</td>
+                            <td className="num mono small nowrap">
+                              <span className={dirClass(row.in.thermoRet)}>{pct(row.in.thermoRet)}</span> /{' '}
+                              <span className={dirClass(row.in.layeredRet)}>{pct(row.in.layeredRet)}</span>
+                            </td>
+                            <td className="num mono small nowrap">
+                              <span className={dirClass(row.out.thermoRet)}>{pct(row.out.thermoRet)}</span> /{' '}
+                              <span className={dirClass(row.out.layeredRet)}>{pct(row.out.layeredRet)}</span>
+                            </td>
+                            <td className="num mono small">
+                              {row.all.buys} / {row.all.sells}
+                            </td>
+                            <td className="num">
+                              {row.key !== 'base' && (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost"
+                                  onClick={() => {
+                                    const next = structuredClone(row.params)
+                                    setParams(next)
+                                    setTab('equity')
+                                    run(next)
+                                    setNotice(`已载入消融方案「${row.label}」并重跑回测，未覆盖线上生效参数。`)
+                                  }}
+                                >
+                                  载入
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <div className="empty">{ablationBusy ? '正在对 10 组维度与规则消融方案执行全量 + 样本内外回测…' : '点击右上角“重跑消融”开始诊断。'}</div>
+              )}
+            </section>
           )}
         </div>
       </div>

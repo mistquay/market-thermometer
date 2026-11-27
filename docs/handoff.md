@@ -55,6 +55,11 @@
   - 新增 Polymarket 信号评估与历史盘口回放引擎（`internal/pmeval`、`mt pmeval`、预测页「信号评估与回放」Tab）；首批 228 市场实测表明 `updown-fair` 存在过自信（模型 52.8% vs 实际 45.0%），回放负收益，继续保持影子模式。
   - 新增零依赖 WebSocket 实时推送（`polymarket.book.ws: true`）、二元/互斥多结果套利扫描器（`internal/pmarb`）、分数凯利仓位与单资产跨周期敞口风控（`MaxAssetUSD`）、策略分级执行与人工审批提案队列（HITL）、核心外部进程 Broker 适配（`internal/plugin/ext/broker.go`）。
   - 新增纯本地 A 股选股器（`#/screener`）、组合再平衡（月/季/年/阈值）与定投模拟、回测交易成本（`costBps`）、可绑定任意标的/组合/事件的研究笔记（`research_note`）。
+- **2026-11-27 第二轮迭代完成（Polymarket 策略攻坚 + A 股校准与投研实战 + 体验补齐）**：
+  - **Polymarket 策略攻坚**：`pmstrat` 支持 Student-t 肥尾分布（`polymarket.strategy.df`）与 30m/5m 混合短期波动率（`BlendedSigma`）；`pmeval` 新增 `ByEdge` / `ByAsk` 归因、卖一区间过滤与被动挂单（Maker 0% 费）回放（`mt pmeval -mode maker`）；新增后台全站 NegRisk 套利监控器（`job.PMArbMonitor`，每 90s 扫本地 + 全站 Top25 高成交互斥多结果，正收益记历史并推送）；接入 Polymarket Data API v2（`/v2/trades`）实现聪明钱/鲸鱼钱包关注（`pm_whale`）与全站大额成交流。
+  - **A 股校准与投研实战**：`csindex` 新增 `H00300` 全收益与全站实时「多宽基估值与趋势雷达」（`GET /api/radar`，沪深300/300全收益/中证500/中证1000/中证红利/科创50 + 300 长期红利复利差 +2.48%/年）；回测页暴露 `costBps` 并新增「维度消融诊断」（`POST /api/backtest/ablation`：实测「方案 C + 仅估值昂贵时卖顶」分层全区间 +71.0%、样本外 -3.6% 略跑赢估值档 -6.1%）；选股器补齐 5 年 PE/PB 分位、自选股（`stock_watch`）与 CSV 导出；A 股模拟盘补齐 CAGR/夏普/回撤/超额绩效统计与涨跌停撮合约束；新增全局「研究笔记」检索页（`#/notes`）。
+  - **高体验收益补齐**：新增认证 SSE 实时事件流（`GET /api/stream`）取代手动刷新；Polymarket 事件图叠加策略信号（▲）与模拟成交（◆），A 股行情页叠加模拟成交复盘；前端全路由 `React.lazy` 代码拆分，首屏入口包从 ~1.08 MB 降至 250 kB（gzip 78.8 kB）。
+  - 全量 `gofmt -l`、`go vet ./...`、`go test ./...`、`pnpm --dir web build` 与浏览器实测（`http://127.0.0.1:8091`）均零报错通过。
 - 用户 2026-11-25 说明：快速开发阶段功能优先，非必要的测试与决策自行处理，只有必须确认的才停下来问。跳过的验证记在下面的清单里，全部开发完后统一验证。
 
 ### 待统一验证清单

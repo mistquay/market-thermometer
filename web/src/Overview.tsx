@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, Minus, Radio, Thermometer, TrendingUp } from 'lucide-react'
-import { api, type DayScore, type Num, type Overview as OverviewData } from './api'
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, Compass, Minus, Radio, RefreshCw, Thermometer, TrendingUp } from 'lucide-react'
+import { api, type DayScore, type Num, type Overview as OverviewData, type RadarResp } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { EVENT_TEXT, fmt, PHASE_TEXT, TIER_COLOR, TIER_TEXT, zoneOf } from './temperature'
 import { useTheme } from './theme'
@@ -126,11 +126,22 @@ function OverviewSkeleton() {
 
 export default function Overview() {
   const [data, setData] = useState<OverviewData | null>(null)
+  const [radar, setRadar] = useState<RadarResp | null>(null)
+  const [radarBusy, setRadarBusy] = useState(false)
   const [error, setError] = useState('')
   const { theme } = useTheme()
 
+  const loadRadar = (refresh = false) => {
+    setRadarBusy(true)
+    api
+      .radar(refresh)
+      .then(setRadar, () => {})
+      .finally(() => setRadarBusy(false))
+  }
+
   useEffect(() => {
     api.overview().then(setData, (e) => setError(e.message))
+    loadRadar(false)
   }, [])
 
   const chartOption = useMemo<EChartsOption | null>(() => {
@@ -475,6 +486,115 @@ export default function Overview() {
             )
           })}
         </div>
+      </section>
+
+      {/* 多宽基估值与趋势雷达 */}
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Compass className="h-4 w-4 text-[var(--accent)]" />
+            <strong className="text-sm font-semibold">多宽基估值与趋势雷达</strong>
+            <span className="text-xs text-[var(--ink-2)]">
+              中证官网实时（近 10 年 PE 分位{radar?.bondY10 != null ? ` · 10Y国债 ${radar.bondY10.toFixed(2)}%` : ''}）
+            </span>
+            {radar?.trSpread5y != null && (
+              <span className="tag tag-ok mono" title="沪深300全收益(H00300) − 沪深300价格指数 近5年年化分红再投差">
+                300 红利复利 +{((radar.trSpread5y ?? 0) * 100).toFixed(2)}%/年
+              </span>
+            )}
+          </div>
+          <button className="btn btn-ghost" disabled={radarBusy} onClick={() => loadRadar(true)}>
+            <RefreshCw className={`h-3.5 w-3.5 ${radarBusy ? 'animate-spin' : ''}`} />
+            刷新
+          </button>
+        </div>
+        {radar ? (
+          <div className="table-scroll">
+            <table className="table static">
+              <thead>
+                <tr>
+                  <th>指数</th>
+                  <th>风格</th>
+                  <th className="num">最新收盘</th>
+                  <th className="num">PE(TTM)</th>
+                  <th className="num">股债利差 ERP</th>
+                  <th className="num">5年 / 10年 PE分位</th>
+                  <th className="num">20日 / 60日 / 1年</th>
+                  <th className="num">距 MA200</th>
+                  <th>估值位置</th>
+                </tr>
+              </thead>
+              <tbody>
+                {radar.items.map((x) => {
+                  const pct10 = x.pePct10Y
+                  const pctColor =
+                    pct10 === null ? 'var(--ink-2)' : pct10 <= 25 ? 'var(--t-cold-2)' : pct10 >= 75 ? 'var(--t-hot-2)' : 'var(--accent)'
+                  const pFmt = (v: Num) => (v === null ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`)
+                  return (
+                    <tr key={x.code}>
+                      <td>
+                        <div className="font-medium text-[var(--ink)]">{x.name}</div>
+                        <div className="mono text-[11px] text-[var(--ink-3)]">
+                          {x.code} {x.date && `· ${x.date}`}
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`tag ${x.isTR ? 'tag-ok' : 'tag-muted'}`}>{x.style}</span>
+                      </td>
+                      {x.error ? (
+                        <td colSpan={7} className="muted small">
+                          拉取失败：{x.error}
+                        </td>
+                      ) : (
+                        <>
+                          <td className="num mono">{x.close.toFixed(2)}</td>
+                          <td className="num mono">{x.pe !== null ? x.pe.toFixed(2) : '—'}</td>
+                          <td className="num mono">{x.erp !== null ? `${x.erp.toFixed(2)}%` : '—'}</td>
+                          <td className="num mono small">
+                            <div>
+                              {x.pePct5Y !== null ? `${x.pePct5Y.toFixed(0)}%` : '—'} /{' '}
+                              <strong style={{ color: pctColor }}>{pct10 !== null ? `${pct10.toFixed(0)}%` : '—'}</strong>
+                            </div>
+                            {pct10 !== null && (
+                              <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-[var(--bg-subtle)] ml-auto">
+                                <div className="h-full rounded-full" style={{ width: `${pct10}%`, background: pctColor }} />
+                              </div>
+                            )}
+                          </td>
+                          <td className="num mono small nowrap">
+                            <span className={(x.ret20d ?? 0) >= 0 ? 'up' : 'down'}>{pFmt(x.ret20d)}</span>
+                            {' / '}
+                            <span className={(x.ret60d ?? 0) >= 0 ? 'up' : 'down'}>{pFmt(x.ret60d)}</span>
+                            {' / '}
+                            <span className={(x.ret250d ?? 0) >= 0 ? 'up' : 'down'}>{pFmt(x.ret250d)}</span>
+                          </td>
+                          <td className={`num mono small ${(x.ma200Dist ?? 0) >= 0 ? 'up' : 'down'}`}>{pFmt(x.ma200Dist)}</td>
+                          <td>
+                            {x.tier ? (
+                              <span
+                                className="tag"
+                                style={{
+                                  color: TIER_COLOR[x.tier] ?? 'var(--ink-2)',
+                                  background: `color-mix(in srgb, ${TIER_COLOR[x.tier] ?? 'var(--ink-2)'} 14%, transparent)`,
+                                }}
+                              >
+                                {TIER_TEXT[x.tier] ?? x.tier}
+                              </span>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty">{radarBusy ? '正在拉取多宽基中证指数估值数据…' : '暂未加载宽基雷达，点击右上角刷新。'}</div>
+        )}
       </section>
 
       {/* 近一年趋势图 */}

@@ -9,11 +9,11 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	ds "market-thermometer/internal/datasource"
 	"market-thermometer/internal/job"
-	"market-thermometer/internal/pmarb"
 	"market-thermometer/internal/pmeval"
 	"market-thermometer/internal/store"
 )
@@ -84,94 +84,133 @@ func (s *Server) pmState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// pmArb 实时扫描当前系列进行中市场与关注事件的二元（Up+Down）及互斥多结果（NegRisk）扣费套利机会。
+// pmArb 实时扫描当前系列进行中市场、关注事件及（discover=1 时）全站高成交 NegRisk 多结果事件的扣费套利机会。
 func (s *Server) pmArb(w http.ResponseWriter, r *http.Request) {
 	if !s.pmReady(w) {
 		return
 	}
-	shares, _ := strconv.ParseFloat(r.URL.Query().Get("shares"), 64)
+	q := r.URL.Query()
+	shares, _ := strconv.ParseFloat(q.Get("shares"), 64)
 	if shares <= 0 || shares > 10000 {
 		shares = 50
 	}
-	ctx := r.Context()
-	now := s.now().Unix()
-	open := false
-	seenSlug := map[string]bool{}
-	var events []ds.PMEvent
-	// 1. 各配置系列当前未结束的 2 个市场
-	for _, ser := range s.opt.PM.Series() {
-		evs, err := s.store.PMEvents(ctx, store.PMEventQuery{Series: ser, Closed: &open, From: now, Asc: true, Limit: 2})
-		if err != nil {
-			continue
-		}
-		for _, e := range evs {
-			if !seenSlug[e.Slug] {
-				seenSlug[e.Slug] = true
-				events = append(events, e)
-			}
+	discover := q.Get("discover") != "0"
+	mon := s.opt.PMArb
+	if mon == nil {
+		mon = job.NewPMArbMonitor(s.store, s.opt.PM.Source(), s.opt.PM.Series(), 0, nil)
+	}
+	var snap job.PMArbSnapshot
+	var hist []job.PMArbHit
+	if q.Get("cached") == "1" {
+		if last, h := mon.Last(); last != nil {
+			snap, hist = *last, h
 		}
 	}
-	// 2. 关注的事件
-	if watched, err := s.store.PMWatched(ctx); err == nil {
-		for _, slug := range watched {
-			if seenSlug[slug] {
-				continue
-			}
-			if e, err := s.store.PMEventBySlug(ctx, slug); err == nil && !e.Closed {
-				seenSlug[slug] = true
-				events = append(events, e)
-			}
-		}
-	}
-	// 批量拉取所有涉及的第一个结果代币订单簿
-	tokSet := map[string]bool{}
-	var tokens []string
-	for _, e := range events {
-		for _, m := range e.Markets {
-			if !m.Closed && len(m.Tokens) > 0 && !tokSet[m.Tokens[0]] {
-				tokSet[m.Tokens[0]] = true
-				tokens = append(tokens, m.Tokens[0])
-			}
-		}
-	}
-	bookMap := map[string]ds.Book{}
-	for i := 0; i < len(tokens); i += 50 {
-		batch := tokens[i:min(i+50, len(tokens))]
-		bs, err := s.opt.PM.Source().Books(ctx, batch)
+	if snap.At.IsZero() {
+		var err error
+		snap, err = mon.Scan(r.Context(), shares, discover)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, "拉取订单簿失败："+err.Error())
 			return
 		}
-		for _, b := range bs {
-			bookMap[b.Token] = b
-		}
+		_, hist = mon.Last()
 	}
-	opps := []pmarb.Opportunity{}
-	for _, e := range events {
-		if e.NegRisk && len(e.Markets) >= 2 {
-			if opp, ok := pmarb.ScanNegRisk(e, bookMap, shares); ok {
-				opps = append(opps, opp)
-			}
+	if hist == nil {
+		hist = []job.PMArbHit{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"scannedEvents": snap.ScannedEvents,
+		"scannedTokens": snap.ScannedTokens,
+		"targetShares":  snap.TargetShares,
+		"discover":      snap.Discover,
+		"at":            snap.At,
+		"opportunities": snap.Opportunities,
+		"positiveCount": snap.PositiveCount,
+		"history":       hist,
+	})
+}
+
+// ---- 聪明钱 / 鲸鱼关注与大额成交流 ----
+
+func (s *Server) pmWhales(w http.ResponseWriter, r *http.Request) {
+	list, err := s.store.PMWhales(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) pmWhaleSave(w http.ResponseWriter, r *http.Request) {
+	var req store.PMWhale
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	addr := strings.ToLower(strings.TrimSpace(req.Address))
+	if !strings.HasPrefix(addr, "0x") || len(addr) != 42 {
+		writeErr(w, http.StatusBadRequest, "请输入合法的 42 位 0x 钱包地址")
+		return
+	}
+	req.Address = addr
+	if req.Label == "" {
+		req.Label = addr[:6] + "…" + addr[38:]
+	}
+	if err := s.store.SavePMWhale(r.Context(), req, s.now()); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) pmWhaleDelete(w http.ResponseWriter, r *http.Request) {
+	addr := strings.ToLower(strings.TrimSpace(r.PathValue("addr")))
+	if err := s.store.DeletePMWhale(r.Context(), addr); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) pmTrades(w http.ResponseWriter, r *http.Request) {
+	if !s.pmReady(w) {
+		return
+	}
+	act, ok := s.opt.PM.Source().(ds.PredictionActivity)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "当前预测市场数据源不支持成交流")
+		return
+	}
+	q := r.URL.Query()
+	user := strings.ToLower(strings.TrimSpace(q.Get("user")))
+	cond := strings.TrimSpace(q.Get("cond"))
+	minUSD, _ := strconv.ParseFloat(q.Get("minUsd"), 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	raw, err := act.RecentTrades(r.Context(), user, cond, limit)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	whales, _ := s.store.PMWhales(r.Context())
+	wMap := map[string]string{}
+	for _, x := range whales {
+		wMap[strings.ToLower(x.Address)] = x.Label
+	}
+	type tradeOut struct {
+		ds.PMTrade
+		WhaleLabel string `json:"whaleLabel,omitempty"`
+	}
+	out := []tradeOut{}
+	for _, tr := range raw {
+		if minUSD > 0 && tr.USDC < minUSD {
 			continue
 		}
-		for _, m := range e.Markets {
-			if len(m.Tokens) >= 2 {
-				if b, ok := bookMap[m.Tokens[0]]; ok {
-					if opp, ok := pmarb.ScanBinary(e, m, b, shares); ok {
-						opps = append(opps, opp)
-					}
-				}
-			}
-		}
+		out = append(out, tradeOut{PMTrade: tr, WhaleLabel: wMap[strings.ToLower(tr.Wallet)]})
 	}
-	pmarb.SortOpportunities(opps)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"scannedEvents": len(events),
-		"scannedTokens": len(tokens),
-		"targetShares":  shares,
-		"at":            s.now(),
-		"opportunities": opps,
-	})
+	writeJSON(w, http.StatusOK, out)
 }
 
 // pmEval 对本地影子信号执行分层评估与历史盘口快照回放。

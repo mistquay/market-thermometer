@@ -3,6 +3,7 @@ package datasource
 // A股标准指标。插件声明自己能提供其中哪些，路由由配置决定。
 const (
 	CNHS300Close     MetricID = "cn.hs300.close"
+	CNHS300TRClose   MetricID = "cn.hs300.tr_close"
 	CNHS300PE        MetricID = "cn.hs300.pe_ttm"
 	CNBondY10        MetricID = "cn.bond.y10"
 	CNCSIAllTurnover MetricID = "cn.csiall.turnover"
@@ -16,6 +17,8 @@ const (
 func init() {
 	for _, m := range []Metric{
 		{ID: CNHS300Close, Market: "CN", Name: "沪深300 收盘价", Unit: "点"},
+		{ID: CNHS300TRClose, Market: "CN", Name: "沪深300 全收益指数", Unit: "点",
+			Note: "含成分股分红再投资（H00300），用于对比价格指数的真实长期回报"},
 		{ID: CNHS300PE, Market: "CN", Name: "沪深300 市盈率(TTM)", Unit: "倍",
 			Note: "各来源口径不同，切换来源后须重算分位"},
 		{ID: CNBondY10, Market: "CN", Name: "中国10年期国债收益率", Unit: "%"},

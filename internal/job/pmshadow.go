@@ -44,6 +44,7 @@ type PMShadow struct {
 	logf     func(string, ...any)
 	name     string
 	minEdge  float64       // 记录信号的最小预期收益（每股，美元）
+	df       float64       // Student-t 自由度（0 为正态，>2 为厚尾 t 分布）
 	cooldown time.Duration // 同一市场同一结果两次信号的最小间隔
 	keep     time.Duration // 内存里保留多久的现价
 
@@ -100,6 +101,14 @@ type PMEval struct {
 // WithSource 设置数据源：用于在 15m / 1h 盘开始 5 分钟后尽快补拉同一时刻开始的 5m 事件，拿到精确起始价。
 func (p *PMShadow) WithSource(src ds.PredictionSource) *PMShadow {
 	p.src = src
+	return p
+}
+
+// WithDF 设置 Student-t 自由度（>2 时启用厚尾分布，降低尾部过自信）。
+func (p *PMShadow) WithDF(df float64) *PMShadow {
+	p.mu.Lock()
+	p.df = df
+	p.mu.Unlock()
 	return p
 }
 
@@ -436,11 +445,7 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 	}
 	e.K, e.KSrc = k.k, k.src
 	recent := p.spot[t.Symbol]
-	i := len(recent)
-	for i > 0 && recent[i-1].T > now.Add(-30*time.Minute).UnixMilli() {
-		i--
-	}
-	sigma := pmstrat.Sigma(recent[i:])
+	sigma := pmstrat.BlendedSigma(recent, now.UnixMilli())
 	if sigma <= 0 {
 		e.Reason = "波动率数据不足"
 		return e
@@ -450,7 +455,7 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 		p.fetchStartPrice(a, t.Start.Unix(), now)
 	}
 	r, ok := pmstrat.ProbUp(pmstrat.Inputs{Now: now.Unix(), Start: t.Start.Unix(), End: t.End.Unix(), K: k.k, KErrBp: k.errBp,
-		EndErrBp: p.basisErr[a], Basis: p.basis[a], Sigma: sigma, Spot: recent})
+		EndErrBp: p.basisErr[a], Basis: p.basis[a], Sigma: sigma, DF: p.df, Spot: recent})
 	if !ok {
 		e.Reason = "现价中断"
 		return e

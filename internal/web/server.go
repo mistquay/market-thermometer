@@ -35,6 +35,7 @@ type Options struct {
 	PM            *job.PMSyncer        // Polymarket 同步器；为 nil 时预测市场页显示未配置
 	PMBook        *job.PMBookCollector // 盘口采集器；为 nil 时不采集
 	PMShadow      *job.PMShadow        // 策略影子模式；为 nil 时未启用
+	PMArb         *job.PMArbMonitor    // 后台套利扫描器；为 nil 时按需创建
 }
 
 type Server struct {
@@ -75,12 +76,14 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/metrics", s.auth(s.metrics))
 	api.HandleFunc("GET /api/series", s.auth(s.series))
 	api.HandleFunc("GET /api/overview", s.auth(s.overview))
+	api.HandleFunc("GET /api/radar", s.auth(s.radar))
 	api.HandleFunc("GET /api/scores", s.auth(s.scores))
 	api.HandleFunc("GET /api/signals", s.auth(s.signals))
 	api.HandleFunc("GET /api/params", s.auth(s.params))
 	api.HandleFunc("POST /api/params", s.auth(s.saveParams))
 	api.HandleFunc("POST /api/backtest", s.auth(s.runBacktest))
 	api.HandleFunc("POST /api/backtest/robust", s.auth(s.runRobust))
+	api.HandleFunc("POST /api/backtest/ablation", s.auth(s.runAblation))
 	api.HandleFunc("POST /api/jobs/sync", s.auth(s.startSync))
 	api.HandleFunc("POST /api/jobs/breadth", s.auth(s.startBreadth))
 	api.HandleFunc("GET /api/stocks/stats", s.auth(s.stockStats))
@@ -96,6 +99,8 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/jobs/ext-backfill", s.auth(s.startExtBackfill))
 	api.HandleFunc("GET /api/securities/search", s.auth(s.searchSecurities))
 	api.HandleFunc("GET /api/securities/{kind}/{code}/series", s.auth(s.securitySeries))
+	api.HandleFunc("GET /api/securities/{kind}/{code}/fills", s.auth(s.securityFills))
+	api.HandleFunc("GET /api/stream", s.auth(s.stream))
 	api.HandleFunc("POST /api/jobs/names", s.auth(s.startNames))
 	api.HandleFunc("GET /api/portfolios", s.auth(s.portfolios))
 	api.HandleFunc("POST /api/portfolios", s.auth(s.savePortfolio))
@@ -125,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/pm", s.auth(s.pmState))
 	api.HandleFunc("GET /api/pm/events", s.auth(s.pmEvents))
 	api.HandleFunc("GET /api/pm/events/{slug}", s.auth(s.pmEvent))
+	api.HandleFunc("GET /api/pm/events/{slug}/markers", s.auth(s.pmEventMarkers))
 	api.HandleFunc("GET /api/pm/search", s.auth(s.pmSearch))
 	api.HandleFunc("GET /api/pm/prices", s.auth(s.pmPrices))
 	api.HandleFunc("GET /api/pm/book", s.auth(s.pmBook))
@@ -132,6 +138,10 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/pm/signals", s.auth(s.pmSignals))
 	api.HandleFunc("POST /api/pm/eval", s.auth(s.pmEval))
 	api.HandleFunc("GET /api/pm/arb", s.auth(s.pmArb))
+	api.HandleFunc("GET /api/pm/whales", s.auth(s.pmWhales))
+	api.HandleFunc("POST /api/pm/whales", s.auth(s.pmWhaleSave))
+	api.HandleFunc("DELETE /api/pm/whales/{addr}", s.auth(s.pmWhaleDelete))
+	api.HandleFunc("GET /api/pm/trades", s.auth(s.pmTrades))
 	api.HandleFunc("GET /api/pm/exec", s.auth(s.pmExecGet))
 	api.HandleFunc("POST /api/pm/exec", s.auth(s.pmExecSave))
 	api.HandleFunc("GET /api/pm/proposals", s.auth(s.pmProposals))
@@ -151,6 +161,9 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/jobs", s.auth(s.recentJobs))
 	api.HandleFunc("GET /api/audit", s.auth(s.audits))
 	api.HandleFunc("GET /api/screener", s.auth(s.screener))
+	api.HandleFunc("GET /api/stocks/watch", s.auth(s.stockWatchList))
+	api.HandleFunc("POST /api/stocks/watch", s.auth(s.stockWatchAdd))
+	api.HandleFunc("DELETE /api/stocks/watch/{kind}/{code}", s.auth(s.stockWatchDelete))
 	api.HandleFunc("GET /api/notes", s.auth(s.notesList))
 	api.HandleFunc("POST /api/notes", s.auth(s.noteSave))
 	api.HandleFunc("PUT /api/notes/{id}", s.auth(s.noteSave))

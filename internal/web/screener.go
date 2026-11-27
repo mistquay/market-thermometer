@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -28,6 +29,12 @@ func (s *Server) screener(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	watchedList, _ := s.store.StockWatched(ctx)
+	wSet := map[string]bool{}
+	for _, w := range watchedList {
+		wSet[w.Kind+":"+w.Code] = true
+	}
+
 	q := r.URL.Query()
 	kind := q.Get("kind")
 	if kind == "" {
@@ -38,15 +45,22 @@ func (s *Server) screener(w http.ResponseWriter, r *http.Request) {
 	peMax, hasPEMax := parseOptFloat(q.Get("peMax"))
 	pbMin, hasPBMin := parseOptFloat(q.Get("pbMin"))
 	pbMax, hasPBMax := parseOptFloat(q.Get("pbMax"))
+	pePctMax, hasPEPctMax := parseOptFloat(q.Get("pePctMax"))
+	pbPctMax, hasPBPctMax := parseOptFloat(q.Get("pbPctMax"))
 	mvMin, hasMVMin := parseOptFloat(q.Get("mvMin"))
 	mvMax, hasMVMax := parseOptFloat(q.Get("mvMax"))
 	amtMin, hasAmtMin := parseOptFloat(q.Get("amtMin"))
 	ret20Min, hasRet20Min := parseOptFloat(q.Get("ret20Min"))
 	ret20Max, hasRet20Max := parseOptFloat(q.Get("ret20Max"))
 	aboveMA := q.Get("aboveMa200") // "" | "1" | "0"
+	onlyWatched := q.Get("watched") == "1"
 
 	matched := make([]store.ScreenerRow, 0, 256)
 	for _, row := range rows {
+		row.Watched = wSet[row.Kind+":"+row.Code]
+		if onlyWatched && !row.Watched {
+			continue
+		}
 		if kind != "all" && row.Kind != kind {
 			continue
 		}
@@ -63,6 +77,12 @@ func (s *Server) screener(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if hasPBMax && (row.PB == nil || *row.PB > pbMax) {
+			continue
+		}
+		if hasPEPctMax && (row.PEPct5Y == nil || *row.PEPct5Y > pePctMax) {
+			continue
+		}
+		if hasPBPctMax && (row.PBPct5Y == nil || *row.PBPct5Y > pbPctMax) {
 			continue
 		}
 		if hasMVMin && (row.TotalMV == nil || *row.TotalMV < mvMin) {
@@ -103,6 +123,14 @@ func (s *Server) screener(w http.ResponseWriter, r *http.Request) {
 		case "pb":
 			if r.PB != nil {
 				return *r.PB, true
+			}
+		case "pePct":
+			if r.PEPct5Y != nil {
+				return *r.PEPct5Y, true
+			}
+		case "pbPct":
+			if r.PBPct5Y != nil {
+				return *r.PBPct5Y, true
 			}
 		case "ret20":
 			if r.Ret20 != nil {
@@ -159,9 +187,50 @@ func (s *Server) screener(w http.ResponseWriter, r *http.Request) {
 		"asOf":      asOf,
 		"universe":  len(rows),
 		"total":     total,
+		"watched":   len(watchedList),
 		"elapsedMs": elapsedMs,
 		"items":     matched,
 	})
+}
+
+func (s *Server) stockWatchList(w http.ResponseWriter, r *http.Request) {
+	list, err := s.store.StockWatched(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) stockWatchAdd(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind string `json:"kind"`
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	req.Code = strings.TrimSpace(req.Code)
+	if (req.Kind != "stock" && req.Kind != "fund") || len(req.Code) != 6 {
+		writeErr(w, http.StatusBadRequest, "无效的证券类别或代码")
+		return
+	}
+	if err := s.store.WatchStock(r.Context(), req.Kind, req.Code, s.now()); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) stockWatchDelete(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	code := r.PathValue("code")
+	if err := s.store.UnwatchStock(r.Context(), kind, code); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) loadScreener(ctx context.Context, refresh bool) ([]store.ScreenerRow, string, int64, error) {

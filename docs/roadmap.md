@@ -106,5 +106,21 @@
   - **底座与运维**：高频盘口/现货快照拆分独立库 `*-tick.db`（自动一次性迁移旧数据，消除与 A 股长同步的写锁争用并减小主库备份）；新增无鉴权 `/healthz`、日志轮转 `mt serve -log`、追加式审计日志表 `audit_log`、推送运维告警开关（盘口采集中断/恢复、同步失败、全局熔断）、Web 可配置 A 股调度窗口、数据质量页增加 24h 高频采集连续性监控、修复插件管理页加密/预测源启用状态显示。
   - **Polymarket 策略闭环**：新增 `internal/pmeval`（按市场首条信号去重、时间聚类、起始价来源与剩余时间分桶、概率校准 Brier Score、基于本地盘口快照 + `pm_spot` 心跳的延迟回放引擎）与 `mt pmeval` CLI + Web「信号评估与回放」Tab；新增零依赖 WebSocket 实时推送（`internal/ws` + `job.PMWSFeed`，断线自动回退 REST）；新增仓位模型（`pmstrat.KellyFraction`/`SizeUSD`）与单资产跨周期风控上限（`MaxAssetUSD`）；新增二元 & 互斥多结果扣费套利扫描器（`internal/pmarb`）；新增策略分级执行模式（`shadow` → `hitl` 人工审批提案队列 → `auto_sim` 模拟盘自动下单）；补齐核心外部进程交易通道 `KindBroker` 宿主适配（`internal/plugin/ext/broker.go`）。
   - **A 股投研深化**：新增纯本地全市场选股器（`#/screener`，基于本地日线与扩展估值表，零外部抓取，点击直达 K 线）；组合分析新增定期/阈值再平衡与按月定投模拟；回测新增可配置交易成本（`costBps`）；新增可绑定任意标的/组合/事件的研究笔记（`research_note` + `NotesBox`）。
+- **2026-11-27 第二轮迭代（Polymarket 策略攻坚 + A 股校准与投研实战 + 体验补齐）**：
+  - **Polymarket 策略攻坚**：
+    - `pmstrat` 新增 Student-t 肥尾概率分布（可配自由度 `df`，默认 0 为正态）与 30m/5m 混合短期波动率（`BlendedSigma`）；
+    - `pmeval` 新增按 Edge 区间（`ByEdge`）与按卖一价格区间（`ByAsk`）的收益归因、卖一区间过滤（`AskMin`/`AskMax`），以及被动挂单 Maker 模式回放（0% 手续费 + 后续盘口穿越成交判定）；
+    - 新增后台定期全站 NegRisk 套利巡检器（`job.PMArbMonitor`，每 90s 扫本地系列 + 关注 + 全站 Top25 高成交互斥多结果事件，正收益记录历史并触发运维推送告警）；
+    - 接入 Polymarket Data API v2（`/v2/trades`，无需鉴权）实现聪明钱/鲸鱼钱包关注名单（`pm_whale`）与全站大额成交流。
+  - **A 股温度计校准与投研实战**：
+    - `csindex` 补齐沪深300 全收益指数（`H00300` / `cn.hs300.tr_close`）与全站实时「多宽基估值与趋势雷达」（`GET /api/radar`：沪深300、沪深300全收益、中证500、中证1000、中证红利、科创50 的 PE、ERP、5Y/10Y PE 分位、动量与 MA200 偏离，以及 300 长期红利复利差）；
+    - 回测页暴露单边交易成本（`costBps`）并新增「维度消融诊断」（`POST /api/backtest/ablation`，单维度/留一法/方案C+昂贵卖顶 10 组方案在全区间、样本内、样本外对照，支持一键载入测试）；
+    - 选股器新增近 5 年 PE/PB 历史分位计算与筛选、星标自选股（`stock_watch`）与 UTF-8 BOM CSV 导出；
+    - A 股模拟盘新增绩效统计（CAGR、年化波动、最大回撤、夏普比率、超额收益 vs 沪深300）与可选涨跌停不可成交约束（`CheckPriceLimit`）；
+    - 新增全局「研究笔记」聚合检索页（`#/notes`，支持全文搜索、标签/分类过滤与一键跳转绑定标的）。
+  - **体验与性能补齐**：
+    - 新增认证 SSE 实时事件流（`GET /api/stream`）取代前端手动刷新，在 Polymarket 页实时推送盘口/影子信号/待批提案/套利状态；
+    - 图表买卖点叠加：Polymarket 事件页走势图叠加策略信号（▲）与模拟盘成交（◆）；A 股行情页新增模拟盘成交复盘列表；
+    - 前端全路由 `React.lazy` + `<Suspense>` 代码拆分，首屏入口包从 ~1.08 MB 降至 250 kB（gzip 78.8 kB）。
 
 接续工作见 `docs/handoff.md`。

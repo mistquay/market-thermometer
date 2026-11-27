@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
   Activity,
   Blocks,
@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   PieChart,
@@ -29,21 +30,23 @@ import { api, setUnauthorizedHandler } from './api'
 import { useTheme } from './theme'
 import CommandPalette from './CommandPalette'
 import Login from './Login'
-import Overview from './Overview'
-import History from './History'
-import DataPage from './DataPage'
-import Signals from './Signals'
-import Backtest from './Backtest'
-import Funds from './Funds'
-import Settings from './Settings'
-import Quality from './Quality'
-import Plugins from './Plugins'
-import Portfolio from './Portfolio'
-import Quote from './Quote'
-import Screener from './Screener'
-import Sim from './Sim'
-import Crypto from './Crypto'
-import Predict from './Predict'
+
+const Overview = lazy(() => import('./Overview'))
+const History = lazy(() => import('./History'))
+const DataPage = lazy(() => import('./DataPage'))
+const Signals = lazy(() => import('./Signals'))
+const Backtest = lazy(() => import('./Backtest'))
+const Funds = lazy(() => import('./Funds'))
+const Settings = lazy(() => import('./Settings'))
+const Quality = lazy(() => import('./Quality'))
+const Plugins = lazy(() => import('./Plugins'))
+const Portfolio = lazy(() => import('./Portfolio'))
+const Quote = lazy(() => import('./Quote'))
+const Screener = lazy(() => import('./Screener'))
+const Sim = lazy(() => import('./Sim'))
+const NotesPage = lazy(() => import('./NotesPage'))
+const Crypto = lazy(() => import('./Crypto'))
+const Predict = lazy(() => import('./Predict'))
 
 type Auth = 'checking' | 'in' | 'out'
 
@@ -63,16 +66,17 @@ const PAGES: PageDef[] = [
   { path: 'overview', label: '总览', group: 'A 股温度计', icon: Gauge, keywords: 'temperature dashboard 温度计', el: () => <Overview /> },
   { path: 'history', label: '历史走势', group: 'A 股温度计', icon: Activity, keywords: 'history chart', el: () => <History /> },
   { path: 'signals', label: '择时信号', group: 'A 股温度计', icon: Radio, keywords: 'signals events', el: () => <Signals /> },
-  { path: 'backtest', label: '策略回测', group: 'A 股温度计', icon: FlaskConical, wide: true, keywords: 'backtest robust 稳健性', el: () => <Backtest /> },
+  { path: 'backtest', label: '策略回测', group: 'A 股温度计', icon: FlaskConical, wide: true, keywords: 'backtest robust ablation 稳健性 消融', el: () => <Backtest /> },
 
   { path: 'quote', label: '行情图表', group: '投研与模拟', icon: CandlestickChart, wide: true, keywords: 'kline stock 股票', el: () => <Quote /> },
   { path: 'screener', label: '本地选股器', group: '投研与模拟', icon: Filter, wide: true, keywords: 'screener filter 选股 估值 pe pb ma200', el: () => <Screener /> },
   { path: 'portfolio', label: '组合分析', group: '投研与模拟', icon: PieChart, keywords: 'portfolio', el: () => <Portfolio /> },
   { path: 'funds', label: '基金自选', group: '投研与模拟', icon: Layers, keywords: 'funds etf', el: () => <Funds /> },
   { path: 'sim', label: 'A 股模拟盘', group: '投研与模拟', icon: Wallet, wide: true, keywords: 'paper trading 模拟交易', el: () => <Sim /> },
+  { path: 'notes', label: '研究笔记', group: '投研与模拟', icon: NotebookPen, keywords: 'notes research journal 笔记 复盘', el: () => <NotesPage /> },
 
   { path: 'crypto', label: '加密行情', group: '加密与预测', icon: Coins, wide: true, keywords: 'btc eth binance okx', el: () => <Crypto /> },
-  { path: 'predict', label: 'Polymarket', group: '加密与预测', icon: TrendingUp, wide: true, keywords: 'prediction market 预测 盘口', el: () => <Predict /> },
+  { path: 'predict', label: 'Polymarket', group: '加密与预测', icon: TrendingUp, wide: true, keywords: 'prediction market 预测 盘口 套利 聪明钱', el: () => <Predict /> },
 
   { path: 'data', label: '数据同步', group: '数据与系统', icon: Database, keywords: 'sync metrics', el: () => <DataPage /> },
   { path: 'quality', label: '数据质量', group: '数据与系统', icon: ShieldCheck, keywords: 'quality check gaps', el: () => <Quality /> },
@@ -331,7 +335,15 @@ export default function App() {
         </header>
 
         <main className={`mx-auto w-full flex-1 px-4 py-5 lg:px-6 lg:py-6 ${page.wide ? 'max-w-[1680px]' : 'max-w-[1320px]'}`}>
-          {page.el()}
+          <Suspense
+            fallback={
+              <div className="flex min-h-[260px] items-center justify-center">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--line-strong)] border-t-[var(--accent)]" />
+              </div>
+            }
+          >
+            {page.el()}
+          </Suspense>
         </main>
       </div>
 

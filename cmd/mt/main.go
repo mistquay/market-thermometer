@@ -231,7 +231,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	}
 	var shadow *job.PMShadow
 	if pmBook != nil && cfg.Polymarket.Strategy.Shadow {
-		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge).WithSource(pm.Source())
+		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge).WithDF(cfg.Polymarket.Strategy.DF).WithSource(pm.Source())
 		pmBook.OnTick(shadow.Tick)
 	}
 	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook, shadow: shadow}, nil
@@ -324,6 +324,10 @@ func cmdServe(args []string) error {
 	if a.shadow != nil && a.pm.Configured() {
 		a.shadow.WithBroker(pmtrade.NewSim(a.store, a.pm.Source()), pusher)
 	}
+	var pmArb *job.PMArbMonitor
+	if a.pm.Configured() {
+		pmArb = job.NewPMArbMonitor(a.store, a.pm.Source(), a.pm.Series(), 90*time.Second, pusher)
+	}
 
 	srv := &http.Server{
 		Addr: a.cfg.Listen,
@@ -336,6 +340,7 @@ func cmdServe(args []string) error {
 			PM:            a.pm,
 			PMBook:        a.pmBook,
 			PMShadow:      a.shadow,
+			PMArb:         pmArb,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -361,6 +366,10 @@ func cmdServe(args []string) error {
 		if a.pmBook.Configured() {
 			go a.pmBook.Run(ctx)
 			log.Printf("Polymarket 盘口采集已启用：每 %s", a.pmBook.Status().Every)
+		}
+		if pmArb != nil {
+			go pmArb.Run(ctx)
+			log.Printf("Polymarket 后台套利扫描已启用：每 90s（含全站高成交 NegRisk 发现）")
 		}
 	}
 	log.Printf("listening on http://%s  数据源: %v", a.cfg.Listen, a.hub.Sources())
@@ -597,6 +606,9 @@ func cmdPMEval(args []string) error {
 	minEdge := fs.Float64("min-edge", 0.03, "最小预期收益过滤")
 	ksrc := fs.String("ksrc", "", "起始价来源过滤（exact/spot/bar，空为全部）")
 	sizing := fs.String("sizing", "fixed", "仓位模式（fixed/kelly）")
+	mode := fs.String("mode", "taker", "执行模式（taker=主动吃单 / maker=被动挂单0费）")
+	askMin := fs.Float64("ask-min", 0, "卖一价格下限（0-1）")
+	askMax := fs.Float64("ask-max", 0, "卖一价格上限（0-1，0为不限）")
 	usd := fs.Float64("usd", 20, "单笔金额或凯利上限（USDC）")
 	all := fs.Bool("all", false, "不过滤每市场重复信号（默认每市场只取第一条）")
 	a, err := setup(fs, args)
@@ -605,7 +617,8 @@ func cmdPMEval(args []string) error {
 	}
 	defer a.store.Close()
 	cfg := pmeval.DefaultConfig()
-	cfg.DelayMs, cfg.MinEdge, cfg.KSrc, cfg.Sizing, cfg.OrderUSD, cfg.FirstPerMarket = *delayMs, *minEdge, *ksrc, *sizing, *usd, !*all
+	cfg.DelayMs, cfg.MinEdge, cfg.KSrc, cfg.Sizing, cfg.ExecMode, cfg.AskMin, cfg.AskMax, cfg.OrderUSD, cfg.FirstPerMarket =
+		*delayMs, *minEdge, *ksrc, *sizing, *mode, *askMin, *askMax, *usd, !*all
 	var fromMs int64
 	if *days > 0 {
 		fromMs = time.Now().AddDate(0, 0, -*days).UnixMilli()
@@ -628,8 +641,18 @@ func cmdPMEval(args []string) error {
 		fmt.Printf("  %-8s N=%-4d 已结算=%-4d 胜率=%5.1f%% 模型=%5.1f%% Brier=%.4f 理论1股=%+.2f\n",
 			b.Key, b.N, b.Resolved, b.WinRate*100, b.AvgModelP*100, b.Brier, b.TheoreticalPnL)
 	}
+	fmt.Println("--- 按 Edge 区间 ---")
+	for _, b := range rep.ByEdge {
+		fmt.Printf("  %-8s N=%-4d 已结算=%-4d 胜率=%5.1f%% 模型=%5.1f%% Brier=%.4f 理论1股=%+.2f\n",
+			b.Key, b.N, b.Resolved, b.WinRate*100, b.AvgModelP*100, b.Brier, b.TheoreticalPnL)
+	}
+	fmt.Println("--- 按卖一价格区间 ---")
+	for _, b := range rep.ByAsk {
+		fmt.Printf("  %-8s N=%-4d 已结算=%-4d 胜率=%5.1f%% 模型=%5.1f%% Brier=%.4f 理论1股=%+.2f\n",
+			b.Key, b.N, b.Resolved, b.WinRate*100, b.AvgModelP*100, b.Brier, b.TheoreticalPnL)
+	}
 	r := rep.Replay
-	fmt.Printf("--- 盘口回放（延迟 %dms，%s $%.0f）---\n", cfg.DelayMs, cfg.Sizing, cfg.OrderUSD)
+	fmt.Printf("--- 盘口回放（%s，延迟 %dms，%s $%.0f）---\n", cfg.ExecMode, cfg.DelayMs, cfg.Sizing, cfg.OrderUSD)
 	fmt.Printf("  成交 %d 笔（胜 %d / 负 %d，胜率 %.1f%%），跳过：心跳超时 %d / 无盘口 %d / 风控 %d / 无法成交 %d\n",
 		r.Executed, r.Wins, r.Losses, r.WinRate*100, r.SkippedStale, r.SkippedNoBook, r.SkippedRisk, r.SkippedNoFill)
 	fmt.Printf("  净盈亏 %+.2f（期末权益 $%.2f），成交额 $%.2f，手续费 $%.2f，ROI %+.2f%%，最大回撤 %.2f%%，均滑点 %+.2f¢，聚类夏普 %.2f\n",

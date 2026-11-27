@@ -46,9 +46,13 @@ type Signal struct {
 // Config 是评估与回放参数。
 type Config struct {
 	MinEdge        float64 `json:"minEdge"`        // 最小预期收益筛选（默认 0.03）
+	AskMin         float64 `json:"askMin"`         // 卖一价格下限过滤（0 不限）
+	AskMax         float64 `json:"askMax"`         // 卖一价格上限过滤（0 不限）
 	KSrc           string  `json:"kSrc"`           // "" 全部 | exact | spot | bar
 	Series         string  `json:"series"`         // "" 全部或指定系列
 	FirstPerMarket bool    `json:"firstPerMarket"` // 每个市场只取第一条信号（默认 true）
+	ExecMode       string  `json:"execMode"`       // taker（默认，吃卖一扣费）| maker（挂买一 0 费率，需后续盘口穿越）
+	MakerOffset    float64 `json:"makerOffset"`    // maker 模式下相对买一加价幅度（美元，默认 0）
 	DelayMs        int64   `json:"delayMs"`        // 模拟下单延迟（毫秒，默认 1000）
 	HeartbeatMs    int64   `json:"heartbeatMs"`    // 现货心跳最大允许滞后（毫秒，默认 15000）
 	ClusterMin     int     `json:"clusterMin"`     // 时间聚类窗口（分钟，默认 15）
@@ -62,7 +66,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		MinEdge: 0.03, FirstPerMarket: true, DelayMs: 1000, HeartbeatMs: 15_000, ClusterMin: 15,
+		MinEdge: 0.03, FirstPerMarket: true, ExecMode: "taker", DelayMs: 1000, HeartbeatMs: 15_000, ClusterMin: 15,
 		InitialCash: 1000, Sizing: "fixed", OrderUSD: 20, KellyFrac: 0.25, MaxAssetUSD: 100, UseFairLimit: true,
 	}
 }
@@ -86,6 +90,9 @@ func (c Config) normalize() Config {
 	if c.Sizing == "" {
 		c.Sizing = "fixed"
 	}
+	if c.ExecMode != "maker" {
+		c.ExecMode = "taker"
+	}
 	return c
 }
 
@@ -95,6 +102,8 @@ type Feed struct {
 	NextBook func(token string, atMs, endMs int64) (ds.Book, bool, error)
 	// PrevBook 返回 token 在 atMs 之前（含）的最近一条快照（仅当心跳存活时，表明盘口 hash 未变化）。
 	PrevBook func(token string, atMs int64) (ds.Book, bool, error)
+	// BooksInRange 返回 token 在 [fromMs, toMs] 内的全部快照（升序，用于 Maker 限价挂单穿越检测）。
+	BooksInRange func(token string, fromMs, toMs int64) ([]ds.Book, error)
 	// LastSpotT 返回 symbol 在 atMs 之前（含）最近一条现货价的时间戳（Unix 毫秒）。
 	LastSpotT func(symbol string, atMs int64) (int64, bool, error)
 }
@@ -189,6 +198,8 @@ type Report struct {
 	ByKSrc          []BucketStat  `json:"byKSrc"`
 	BySeries        []BucketStat  `json:"bySeries"`
 	ByTau           []BucketStat  `json:"byTau"`
+	ByEdge          []BucketStat  `json:"byEdge"`
+	ByAsk           []BucketStat  `json:"byAsk"`
 	Calibration     []CalibBin    `json:"calibration"`
 	Replay          ReplaySummary `json:"replay"`
 }
@@ -225,7 +236,39 @@ func tauBucket(tau int64) string {
 	}
 }
 
-var tauOrder = map[string]int{"<60s": 0, "60-180s": 1, "180-300s": 2, "300-900s": 3, ">900s": 4}
+var (
+	tauOrder  = map[string]int{"<60s": 0, "60-180s": 1, "180-300s": 2, "300-900s": 3, ">900s": 4}
+	edgeOrder = map[string]int{"3-5¢": 0, "5-8¢": 1, "8-15¢": 2, "≥15¢": 3}
+	askOrder  = map[string]int{"0-20¢": 0, "20-40¢": 1, "40-60¢": 2, "60-80¢": 3, "80-100¢": 4}
+)
+
+func edgeBucket(edge float64) string {
+	switch {
+	case edge < 0.05:
+		return "3-5¢"
+	case edge < 0.08:
+		return "5-8¢"
+	case edge < 0.15:
+		return "8-15¢"
+	default:
+		return "≥15¢"
+	}
+}
+
+func askBucket(ask float64) string {
+	switch {
+	case ask < 0.20:
+		return "0-20¢"
+	case ask < 0.40:
+		return "20-40¢"
+	case ask < 0.60:
+		return "40-60¢"
+	case ask < 0.80:
+		return "60-80¢"
+	default:
+		return "80-100¢"
+	}
+}
 
 // Evaluate 对升序信号列表执行过滤、分层统计、校准检验与（当 feed != nil 时）历史盘口回放。
 func Evaluate(signals []Signal, cfg Config, feed *Feed) Report {
@@ -237,6 +280,12 @@ func Evaluate(signals []Signal, cfg Config, feed *Feed) Report {
 	var filtered []Signal
 	for _, s := range signals {
 		if s.Edge < cfg.MinEdge-1e-12 {
+			continue
+		}
+		if cfg.AskMin > 0 && s.Ask < cfg.AskMin-1e-12 {
+			continue
+		}
+		if cfg.AskMax > 0 && s.Ask > cfg.AskMax+1e-12 {
 			continue
 		}
 		if cfg.KSrc != "" && s.KSrc != cfg.KSrc {
@@ -273,6 +322,12 @@ func Evaluate(signals []Signal, cfg Config, feed *Feed) Report {
 	}, nil)
 	rep.ByTau = groupBy(filtered, func(s Signal) string { return tauBucket(s.Tau) }, func(a, b string) bool {
 		return tauOrder[a] < tauOrder[b]
+	})
+	rep.ByEdge = groupBy(filtered, func(s Signal) string { return edgeBucket(s.Edge) }, func(a, b string) bool {
+		return edgeOrder[a] < edgeOrder[b]
+	})
+	rep.ByAsk = groupBy(filtered, func(s Signal) string { return askBucket(s.Ask) }, func(a, b string) bool {
+		return askOrder[a] < askOrder[b]
 	})
 	rep.Calibration = calcCalibration(filtered)
 
@@ -520,22 +575,65 @@ func runReplay(list []Signal, cfg Config, feed *Feed) ReplaySummary {
 			allTrades = append(allTrades, tr)
 			continue
 		}
-		limit := 0.0
-		if cfg.UseFairLimit {
-			// 允许吃单的最高价：满足 p - ask - fee(ask) >= 0 的近似上限
-			feeAtP := pmsim.Fee{Rate: s.FeeRate, Exp: s.FeeExp}.Of(bestAsk, 1)
-			limit = s.P - feeAtP
-			if limit <= 0 {
+		var fill pmsim.Fill
+		minSize := s.MinSize
+		if minSize <= 0 {
+			minSize = 5
+		}
+		if cfg.ExecMode == "maker" {
+			// Maker 被动挂单（0 手续费）：挂在本方买一 + MakerOffset（不超过卖一减 1¢ 且不超公允价），
+			// 若后续快照出现对侧卖一 ≤ 挂单价则视为被动成交。
+			if len(ob.Bids) == 0 || feed.BooksInRange == nil {
 				res.SkippedNoFill++
 				tr.SkipReason = "no_fill"
 				allTrades = append(allTrades, tr)
 				continue
 			}
-		}
-		fill := pmsim.Match(ob, pmsim.Buy, 0, usd, limit, pmsim.Fee{Rate: s.FeeRate, Exp: s.FeeExp})
-		minSize := s.MinSize
-		if minSize <= 0 {
-			minSize = 5
+			myBid := ob.Bids[0].Price + cfg.MakerOffset
+			if bestAsk > 0.02 && myBid >= bestAsk {
+				myBid = bestAsk - 0.01
+			}
+			if cfg.UseFairLimit && myBid > s.P-cfg.MinEdge {
+				myBid = s.P - cfg.MinEdge
+			}
+			myBid = math.Floor(myBid*100) / 100
+			if myBid <= 0.01 || myBid >= 0.99 {
+				res.SkippedNoFill++
+				tr.SkipReason = "no_fill"
+				allTrades = append(allTrades, tr)
+				continue
+			}
+			snaps, _ := feed.BooksInRange(s.Token0, execMs, endMs)
+			crossed := false
+			for _, sn := range snaps {
+				sob := pmsim.OutcomeBook(sn, s.Outcome)
+				if len(sob.Asks) > 0 && sob.Asks[0].Price <= myBid+1e-9 {
+					crossed = true
+					break
+				}
+			}
+			if !crossed {
+				res.SkippedNoFill++
+				tr.SkipReason = "no_fill"
+				allTrades = append(allTrades, tr)
+				continue
+			}
+			shares := math.Floor((usd/myBid)*100) / 100
+			fill = pmsim.Fill{Shares: shares, Gross: round4(shares * myBid), Fee: 0}
+			tr.BookSource = "maker"
+		} else {
+			limit := 0.0
+			if cfg.UseFairLimit {
+				feeAtP := pmsim.Fee{Rate: s.FeeRate, Exp: s.FeeExp}.Of(bestAsk, 1)
+				limit = s.P - feeAtP
+				if limit <= 0 {
+					res.SkippedNoFill++
+					tr.SkipReason = "no_fill"
+					allTrades = append(allTrades, tr)
+					continue
+				}
+			}
+			fill = pmsim.Match(ob, pmsim.Buy, 0, usd, limit, pmsim.Fee{Rate: s.FeeRate, Exp: s.FeeExp})
 		}
 		if fill.Shares < minSize || fill.Gross+fill.Fee > cash+1e-9 {
 			res.SkippedNoFill++

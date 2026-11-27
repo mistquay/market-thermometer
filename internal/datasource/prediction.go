@@ -124,6 +124,30 @@ type PredictionSource interface {
 	Books(ctx context.Context, tokens []string) ([]Book, error)
 }
 
+// PMTrade 是一条公开成交记录（来自 Polymarket Data API v2）。
+type PMTrade struct {
+	Wallet    string  `json:"wallet"`
+	Name      string  `json:"name,omitempty"`
+	Side      string  `json:"side"` // BUY / SELL
+	TokenID   string  `json:"tokenId"`
+	CondID    string  `json:"conditionId"`
+	Size      float64 `json:"size"`
+	Price     float64 `json:"price"`
+	USDC      float64 `json:"usdc"`
+	Timestamp int64   `json:"timestamp"`
+	Title     string  `json:"title"`
+	Slug      string  `json:"slug"`
+	EventSlug string  `json:"eventSlug"`
+	Outcome   string  `json:"outcome"`
+	TxHash    string  `json:"txHash,omitempty"`
+}
+
+// PredictionActivity 是可选接口：支持全站高成交活跃事件发现与公开成交流（聪明钱追踪）。
+type PredictionActivity interface {
+	TopActiveEvents(ctx context.Context, limit int) ([]PMEvent, error)
+	RecentTrades(ctx context.Context, user, condID string, limit int) ([]PMTrade, error)
+}
+
 // PredictionFactory 构造一个预测市场插件。
 type PredictionFactory func(env Env) (PredictionSource, error)
 
