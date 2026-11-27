@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, FlaskConical, Layers, Play, RotateCcw, Save, ShieldCheck, SlidersHorizontal, TrendingUp } from 'lucide-react'
+import { ChevronDown, ChevronRight, FlaskConical, Layers, PanelLeftClose, PanelLeftOpen, Play, RotateCcw, Save, ShieldCheck, SlidersHorizontal, TrendingUp } from 'lucide-react'
 import { api, type AblationResp, type BacktestResp, type FullParams, type ParamsResp } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct, TIER_TEXT } from './temperature'
@@ -129,6 +129,7 @@ export default function Backtest() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [name, setName] = useState('')
+  const [paramsOpen, setParamsOpen] = useState(true)
   const { theme } = useTheme()
   const confirm = useConfirm()
   const toast = useToast()
@@ -200,68 +201,193 @@ export default function Backtest() {
   const activeStratObj = r?.strategies.find((s) => s.name === selectedStrat) ?? r?.strategies[0]
   const activeMeta = STRAT_META[activeStratObj?.name ?? 'layered'] ?? STRAT_META.layered
 
-  // 净值对比图：高亮当前选中策略，其余弱化，并标出样本外分界线
+  // 净值 + 联动回撤双联图：高亮当前选中策略，其余弱化，并标出样本外分界线
   const equityOption = useMemo<EChartsOption | null>(() => {
     if (!r || r.dates.length === 0) return null
     const ink = cssVar('--ink-2')
     const inkMain = cssVar('--ink')
     const line = cssVar('--chart-grid') || cssVar('--line')
     const splitDate = r.dates.find((d) => d >= split)
+    const ddOf = (eq: number[]) => {
+      let peak = 0
+      return eq.map((v) => {
+        if (v > peak) peak = v
+        return peak > 0 ? +((v / peak - 1) * 100).toFixed(2) : 0
+      })
+    }
+
     return {
       animation: false,
-      grid: { left: 52, right: 24, top: 36, bottom: 52 },
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      grid: [
+        { left: 54, right: 24, top: 38, height: '54%' },
+        { left: 54, right: 24, top: '69%', bottom: 48 },
+      ],
       tooltip: {
         trigger: 'axis',
         backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
         borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
         borderWidth: 1,
         textStyle: { color: inkMain, fontSize: 12 },
-        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(3) : String(v)),
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(2) : String(v)),
       },
       legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
+      xAxis: [
+        {
+          type: 'category',
+          data: r.dates,
+          boundaryGap: false,
+          axisLine: { lineStyle: { color: line } },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+        },
+        {
+          type: 'category',
+          gridIndex: 1,
+          data: r.dates,
+          boundaryGap: false,
+          axisLine: { lineStyle: { color: line } },
+          axisTick: { show: false },
+          axisLabel: { color: ink, fontSize: 11 },
+        },
+      ],
+      yAxis: [
+        {
+          type: 'value',
+          scale: true,
+          name: '净值',
+          nameTextStyle: { color: ink, fontSize: 11 },
+          splitLine: { lineStyle: { color: line, type: 'dashed' } },
+          axisLabel: { color: ink, fontSize: 11 },
+        },
+        {
+          type: 'value',
+          gridIndex: 1,
+          max: 0,
+          name: '回撤%',
+          nameTextStyle: { color: ink, fontSize: 11 },
+          splitLine: { lineStyle: { color: line, type: 'dashed' } },
+          axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` },
+        },
+      ],
+      dataZoom: [
+        { type: 'inside', xAxisIndex: [0, 1] },
+        { type: 'slider', xAxisIndex: [0, 1], height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+      ],
+      series: [
+        ...r.strategies.map((s, idx) => {
+          const c = cssVar(STRAT_META[s.name]?.colorVar ?? '--ink-2')
+          const isSel = s.name === (activeStratObj?.name ?? '')
+          return {
+            name: s.label,
+            type: 'line' as const,
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            data: s.equity,
+            showSymbol: false,
+            z: isSel ? 10 : 2,
+            lineStyle: { width: isSel ? 2.5 : 1.2, color: c, opacity: isSel ? 1 : 0.42 },
+            itemStyle: { color: c },
+            markLine:
+              idx === 0 && splitDate
+                ? {
+                    symbol: 'none',
+                    silent: true,
+                    lineStyle: { color: cssVar('--warn'), type: 'dashed', width: 1.2, opacity: 0.8 },
+                    label: {
+                      formatter: `样本外 ${splitDate} →`,
+                      color: cssVar('--warn'),
+                      backgroundColor: cssVar('--panel'),
+                      padding: [2, 6],
+                      borderRadius: 4,
+                      fontSize: 11,
+                      position: 'end' as const,
+                    },
+                    data: [{ xAxis: splitDate }],
+                  }
+                : undefined,
+          }
+        }),
+        ...r.strategies.map((s) => {
+          const c = cssVar(STRAT_META[s.name]?.colorVar ?? '--ink-2')
+          const isSel = s.name === (activeStratObj?.name ?? '')
+          return {
+            name: `${s.label}回撤`,
+            type: 'line' as const,
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: ddOf(s.equity),
+            showSymbol: false,
+            z: isSel ? 10 : 1,
+            lineStyle: { width: isSel ? 1.8 : 0.9, color: c, opacity: isSel ? 0.95 : 0.25 },
+            itemStyle: { color: c },
+            areaStyle: isSel ? { color: c, opacity: 0.16 } : undefined,
+          }
+        }),
+      ],
+    }
+  }, [r, activeStratObj?.name, split, theme])
+
+  // 维度消融对比柱状图（全区间分层 vs 样本外分层 + 估值档样本外参考线）
+  const ablationOption = useMemo<EChartsOption | null>(() => {
+    if (!ablation?.rows?.length) return null
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const accent = cssVar('--accent')
+    const cold = cssVar('--t-cold-2')
+    const warn = cssVar('--warn')
+    const baseOutVal = +(ablation.rows[0].out.valRet * 100).toFixed(1)
+    const names = ablation.rows.map((row) => row.label.replace(/（.*?）/g, ''))
+    return {
+      animation: false,
+      grid: { left: 52, right: 24, top: 34, bottom: 54 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : String(v)),
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 12, itemHeight: 8 },
       xAxis: {
         type: 'category',
-        data: r.dates,
-        boundaryGap: false,
+        data: names,
         axisLine: { lineStyle: { color: line } },
-        axisTick: { show: false },
-        axisLabel: { color: ink, fontSize: 11 },
+        axisLabel: { color: ink, fontSize: 11, rotate: 18, interval: 0 },
       },
       yAxis: {
         type: 'value',
-        scale: true,
         splitLine: { lineStyle: { color: line, type: 'dashed' } },
-        axisLabel: { color: ink, fontSize: 11 },
+        axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` },
       },
-      dataZoom: [
-        { type: 'inside' },
-        { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+      series: [
+        {
+          name: '全区间·分层收益',
+          type: 'bar',
+          barMaxWidth: 22,
+          data: ablation.rows.map((row) => +(row.all.layeredRet * 100).toFixed(1)),
+          itemStyle: { color: accent, borderRadius: [4, 4, 0, 0] },
+        },
+        {
+          name: '样本外·分层收益',
+          type: 'bar',
+          barMaxWidth: 22,
+          data: ablation.rows.map((row) => +(row.out.layeredRet * 100).toFixed(1)),
+          itemStyle: { color: cold, borderRadius: [4, 4, 0, 0] },
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: warn, type: 'dashed', width: 1.4 },
+            label: { formatter: `估值档样本外基线 ${baseOutVal >= 0 ? '+' : ''}${baseOutVal}%`, color: warn, fontSize: 11, position: 'insideEndTop' },
+            data: [{ yAxis: baseOutVal }],
+          },
+        },
       ],
-      series: r.strategies.map((s, idx) => {
-        const c = cssVar(STRAT_META[s.name]?.colorVar ?? '--ink-2')
-        const isSel = s.name === (activeStratObj?.name ?? '')
-        return {
-          name: s.label,
-          type: 'line',
-          data: s.equity,
-          showSymbol: false,
-          z: isSel ? 10 : 2,
-          lineStyle: { width: isSel ? 2.6 : 1.25, color: c, opacity: isSel ? 1 : 0.45 },
-          itemStyle: { color: c },
-          markLine:
-            idx === 0 && splitDate
-              ? {
-                  symbol: 'none',
-                  silent: true,
-                  lineStyle: { color: cssVar('--warn'), type: 'dashed', width: 1.2, opacity: 0.7 },
-                  label: { formatter: '样本外 →', color: cssVar('--warn'), fontSize: 11, position: 'insideEndTop' },
-                  data: [{ xAxis: splitDate }],
-                }
-              : undefined,
-        }
-      }),
     }
-  }, [r, activeStratObj?.name, split, theme])
+  }, [ablation, theme])
 
   // 选中策略对应的买卖信号点 + 每日仓位双联图
   const inspector = useMemo(() => {
@@ -410,7 +536,7 @@ export default function Backtest() {
     <div className="page">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="m-0">策略回测</h1>
             {res && (
               <span className={`tag ${dirty ? 'tag-warn' : 'tag-ok'}`}>
@@ -419,10 +545,14 @@ export default function Backtest() {
             )}
           </div>
           <p className="sub mt-1">
-            本地数据即时重算，不改动线上结果；点击下方任意策略行即可联动查看其买卖点与每日仓位。
+            本地数据即时重算，不改动线上结果；点击下方任意策略行即可联动查看其买卖点、回撤与每日仓位。
             {res && <span className="mono"> · 本次耗时 {res.elapsedMs} ms</span>}
           </p>
         </div>
+        <button type="button" className="btn" onClick={() => setParamsOpen((v) => !v)}>
+          {paramsOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+          {paramsOpen ? '收起参数栏' : '展开参数栏'}
+        </button>
       </div>
 
       {error && (
@@ -436,8 +566,9 @@ export default function Backtest() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[310px_1fr] xl:items-start">
+      <div className={`grid grid-cols-1 gap-4 xl:items-start ${paramsOpen ? 'xl:grid-cols-[310px_1fr]' : 'xl:grid-cols-1'}`}>
         {/* 左侧手风琴参数面板 + 吸顶操作条 */}
+        {paramsOpen && (
         <aside className="panel flex flex-col overflow-hidden xl:sticky xl:top-[72px] xl:max-h-[calc(100vh-92px)]">
           <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg-subtle)] px-4 py-3">
             <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ink)]">
@@ -550,8 +681,9 @@ export default function Backtest() {
                   maxLength={40}
                   onChange={(e) => setName(e.target.value)}
                 />
-                <button className="btn h-8 px-2.5 text-xs" disabled={!name.trim()} onClick={() => save(false)} title="仅保存">
+                <button className="btn h-8 px-2.5 text-xs" disabled={!name.trim()} onClick={() => save(false)} title="仅保存参数集（不覆盖生效版本）">
                   <Save className="h-3.5 w-3.5" />
+                  保存
                 </button>
                 <button
                   className="btn btn-primary h-8 px-2.5 text-xs"
@@ -602,8 +734,9 @@ export default function Backtest() {
             </div>
           </div>
         </aside>
+        )}
 
-        {/* 右侧：核心结论 KPI 条 + 3 个工作区 Tab */}
+        {/* 右侧：核心结论 KPI 条 + 工作区 Tab */}
         <div className="flex min-w-0 flex-col gap-4">
           {r && r.days > 0 && focusStrat && (
             <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
@@ -761,7 +894,7 @@ export default function Backtest() {
                 </div>
                 {equityOption && (
                   <div className="border-t border-[var(--line)] p-3">
-                    <EChart option={equityOption} height={320} />
+                    <EChart option={equityOption} height={430} />
                   </div>
                 )}
               </section>
@@ -885,17 +1018,22 @@ export default function Backtest() {
                       </>
                     )}
                   </div>
+                  {ablationOption && (
+                    <div className="border-b border-[var(--line)] p-3">
+                      <EChart option={ablationOption} height={270} />
+                    </div>
+                  )}
                   <div className="table-scroll">
                     <table className="table static">
                       <thead>
                         <tr>
                           <th>消融方案</th>
-                          <th className="num">全区间·温度计</th>
-                          <th className="num">全区间·分层</th>
-                          <th className="num">全区间回撤(分层)</th>
-                          <th className="num">样本内·温度计 / 分层</th>
-                          <th className="num">样本外·温度计 / 分层</th>
-                          <th className="num">买/卖信号</th>
+                          <th className="num nowrap">全区间·温度计</th>
+                          <th className="num nowrap">全区间·分层</th>
+                          <th className="num nowrap">全区间回撤(分层)</th>
+                          <th className="num nowrap">样本内·温度计 / 分层</th>
+                          <th className="num nowrap">样本外·温度计 / 分层</th>
+                          <th className="num nowrap">买 / 卖信号</th>
                           <th></th>
                         </tr>
                       </thead>
@@ -906,9 +1044,9 @@ export default function Backtest() {
                               <div className="font-medium text-[var(--ink)]">{row.label}</div>
                               <div className="text-[11px] text-[var(--ink-3)]">{row.desc}</div>
                             </td>
-                            <td className={`num mono font-semibold ${dirClass(row.all.thermoRet)}`}>{pct(row.all.thermoRet)}</td>
-                            <td className={`num mono font-semibold ${dirClass(row.all.layeredRet)}`}>{pct(row.all.layeredRet)}</td>
-                            <td className="num mono down">{pct(row.all.layeredDD)}</td>
+                            <td className={`num mono nowrap font-semibold ${dirClass(row.all.thermoRet)}`}>{pct(row.all.thermoRet)}</td>
+                            <td className={`num mono nowrap font-semibold ${dirClass(row.all.layeredRet)}`}>{pct(row.all.layeredRet)}</td>
+                            <td className="num mono nowrap down">{pct(row.all.layeredDD)}</td>
                             <td className="num mono small nowrap">
                               <span className={dirClass(row.in.thermoRet)}>{pct(row.in.thermoRet)}</span> /{' '}
                               <span className={dirClass(row.in.layeredRet)}>{pct(row.in.layeredRet)}</span>
@@ -917,7 +1055,7 @@ export default function Backtest() {
                               <span className={dirClass(row.out.thermoRet)}>{pct(row.out.thermoRet)}</span> /{' '}
                               <span className={dirClass(row.out.layeredRet)}>{pct(row.out.layeredRet)}</span>
                             </td>
-                            <td className="num mono small">
+                            <td className="num mono small nowrap">
                               {row.all.buys} / {row.all.sells}
                             </td>
                             <td className="num">

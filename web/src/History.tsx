@@ -110,8 +110,8 @@ export default function History() {
 
     const grids = [
       { left: 58, right: 24, top: 32, height: '29%' },
-      { left: 58, right: 24, top: '43%', height: '24%' },
-      { left: 58, right: 24, top: '73%', height: '15%' },
+      { left: 58, right: 24, top: '40%', height: '25%' },
+      { left: 58, right: 24, top: '70%', height: '19%' },
     ]
     const axis = (i: number) => ({
       type: 'category' as const,
@@ -154,7 +154,7 @@ export default function History() {
       yAxis: [
         yAxis(0, { scale: true, name: '沪深300', nameTextStyle: { color: ink, fontSize: 11 } }),
         yAxis(1, { min: 0, max: 100, interval: 20, name: '温度 T_s', nameTextStyle: { color: ink, fontSize: 11 } }),
-        yAxis(2, { min: 0, max: 100, interval: 50, name: '估值 V', nameTextStyle: { color: ink, fontSize: 11 } }),
+        yAxis(2, { min: 0, max: 100, interval: 25, name: '估值 V', nameTextStyle: { color: ink, fontSize: 11 } }),
       ],
       dataZoom: [
         { type: 'inside', xAxisIndex: [0, 1, 2], startValue: sliceInfo.startValue },
@@ -162,7 +162,7 @@ export default function History() {
           type: 'slider',
           xAxisIndex: [0, 1, 2],
           startValue: sliceInfo.startValue,
-          bottom: 8,
+          bottom: 4,
           height: 18,
           borderColor: cssVar('--line'),
           textStyle: { color: ink },
@@ -223,6 +223,16 @@ export default function History() {
           lineStyle: { width: 1.8, color: cssVar('--t-hot-1') },
           itemStyle: { color: cssVar('--t-hot-1') },
           markArea: band(th.cheap, th.expensive),
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            label: { color: ink, fontSize: 10, position: 'insideEndTop' },
+            lineStyle: { type: 'dashed', width: 1, opacity: 0.65 },
+            data: [
+              { yAxis: th.cheap, lineStyle: { color: cssVar('--t-cold-2') }, label: { formatter: `便宜 ≤${th.cheap}` } },
+              { yAxis: th.expensive, lineStyle: { color: cssVar('--t-hot-2') }, label: { formatter: `昂贵 ≥${th.expensive}` } },
+            ],
+          },
         },
       ],
     }
@@ -340,22 +350,29 @@ export default function History() {
             <span className="text-xs font-medium text-[var(--ink-2)]">叠加子维度：</span>
             {DIMS.map((d) => {
               const on = activeDims[d.key]
+              const hasData = !!data && data.series[d.key].some((v) => v !== null)
               return (
                 <button
                   key={d.key}
                   type="button"
+                  aria-pressed={on}
+                  disabled={!hasData}
+                  title={hasData ? `叠加/隐藏${d.label}历史曲线` : '当前数据集中该维度暂无历史序列'}
                   onClick={() => toggleDim(d.key)}
                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                    on
-                      ? 'border-[var(--line-strong)] bg-[var(--panel-2)] text-[var(--ink)]'
-                      : 'border-[var(--line)] bg-transparent text-[var(--ink-3)] hover:text-[var(--ink-2)]'
+                    !hasData
+                      ? 'cursor-not-allowed border-[var(--line)] opacity-45'
+                      : on
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--ink)]'
+                        : 'border-[var(--line)] bg-transparent text-[var(--ink-2)] hover:border-[var(--line-strong)] hover:text-[var(--ink)]'
                   }`}
                 >
                   <span
                     className="h-2 w-2 rounded-full"
-                    style={{ background: `var(${d.varName})`, opacity: on ? 1 : 0.35 }}
+                    style={{ background: `var(${d.varName})`, opacity: on ? 1 : 0.4 }}
                   />
                   {d.label}
+                  {!hasData && <span className="text-[10px] text-[var(--ink-3)]">(无数据)</span>}
                 </button>
               )
             })}
