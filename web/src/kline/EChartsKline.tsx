@@ -1,11 +1,13 @@
 // ECharts 渲染器：K 线 + 成交量双网格，或收盘价折线。
 import { useMemo } from 'react'
 import EChart, { cssVar, type EChartsOption } from '../EChart'
+import { useTheme } from '../theme'
 import { DOWN, UP, type KlineProps } from './kline'
 
 export default function EChartsKline({ data, height }: KlineProps) {
+  const { theme } = useTheme()
   const option = useMemo<EChartsOption>(() => {
-    const ink = cssVar('--ink-2'), line = cssVar('--line')
+    const ink = cssVar('--ink-2'), line = cssVar('--chart-grid') || cssVar('--line')
     const lines = data.lines.map((l) => ({ name: l.name, type: 'line', data: l.data, showSymbol: false,
       lineStyle: { width: 1, color: l.color }, itemStyle: { color: l.color } }))
     const { open, high, low, volume } = data
@@ -55,6 +57,6 @@ export default function EChartsKline({ data, height }: KlineProps) {
         ...lines,
       ],
     }
-  }, [data])
+  }, [data, theme])
   return <EChart option={option} height={height} />
 }

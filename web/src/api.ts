@@ -101,7 +101,7 @@ export type ParamsResp = { sets: ParamSet[]; defaults: FullParams; defaultsVersi
 export type HStat = { n: number; median: Num; mean: Num; winRate: Num }
 export type BtGroup = { source: string; side: number; period: 'all' | 'in' | 'out'; n: number; horizons: HStat[]; maeMedian: Num }
 export type BtSignal = SignalEvent & { source: string; side: number; rets: Num[]; mae: Num }
-export type BtStrategy = { name: string; label: string; totalRet: number; cagr: number; maxDD: number; exposure: number; switches: number; equity: number[] }
+export type BtStrategy = { name: string; label: string; totalRet: number; cagr: number; maxDD: number; exposure: number; switches: number; equity: number[]; position?: number[] }
 export type BtConfig = { from: string; to: string; split: string; horizons: number[]; maeWindow: number }
 export type BtResult = {
   config: BtConfig

@@ -5,8 +5,11 @@ type Marker = { date: string; close: number | null; type: string; observe?: bool
 
 /** 价格折线 + 底部/顶部信号标记（▲ 买、▼ 卖，观察级为空心）。 */
 export function priceWithSignals(dates: string[], closes: (number | null)[], events: Marker[], name = '沪深300'): EChartsOption {
-  const ink = cssVar('--ink-2'), line = cssVar('--line')
-  const buy = cssVar('--t-cold-2'), sell = cssVar('--t-hot-2')
+  const ink = cssVar('--ink-2')
+  const inkMain = cssVar('--ink')
+  const line = cssVar('--chart-grid') || cssVar('--line')
+  const buy = cssVar('--t-cold-2')
+  const sell = cssVar('--t-hot-2')
   const marks = events
     .filter((e) => (e.type === 'BUY_DIP' || e.type === 'SELL_PEAK') && e.close !== null)
     .map((e) => {
@@ -24,16 +27,46 @@ export function priceWithSignals(dates: string[], closes: (number | null)[], eve
     })
   return {
     animation: false,
-    grid: { left: 64, right: 24, top: 16, bottom: 64 },
-    tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-    yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20, bottom: 12, borderColor: line, textStyle: { color: ink } }],
+    grid: { left: 58, right: 24, top: 18, bottom: 60 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+      borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+      borderWidth: 1,
+      textStyle: { color: inkMain, fontSize: 12 },
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: line } },
+      axisTick: { show: false },
+      axisLabel: { color: ink, fontSize: 11 },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      splitLine: { lineStyle: { color: line, type: 'dashed' } },
+      axisLabel: { color: ink, fontSize: 11 },
+    },
+    dataZoom: [
+      { type: 'inside' },
+      { type: 'slider', height: 18, bottom: 10, borderColor: cssVar('--line'), textStyle: { color: ink } },
+    ],
     series: [
       {
-        name, type: 'line', data: closes, showSymbol: false,
-        lineStyle: { width: 1.2, color: ink }, itemStyle: { color: ink },
-        markPoint: { data: marks, tooltip: { formatter: (p: { name: string; data: { coord: [string, number] } }) => `${p.data.coord[0]} ${p.name}` } },
+        name,
+        type: 'line',
+        data: closes,
+        showSymbol: false,
+        lineStyle: { width: 1.5, color: ink },
+        itemStyle: { color: ink },
+        markPoint: {
+          data: marks,
+          tooltip: {
+            formatter: (p: { name: string; data: { coord: [string, number] } }) => `${p.data.coord[0]} ${p.name}`,
+          },
+        },
       },
     ],
   }

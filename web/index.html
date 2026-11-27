@@ -1,10 +1,20 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <title>市场温度计</title>
+    <meta name="color-scheme" content="dark light" />
+    <title>市场温度计 · 投研终端</title>
+    <script>
+      ;(function () {
+        try {
+          var t = localStorage.getItem('mt-theme')
+          var theme = t === 'light' || t === 'dark' ? t : 'dark'
+          document.documentElement.dataset.theme = theme
+          document.documentElement.style.colorScheme = theme
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

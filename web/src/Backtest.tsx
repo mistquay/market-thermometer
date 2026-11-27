@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, type BacktestResp, type BtGroup, type FullParams, type HStat, type ParamsResp } from './api'
+import { ChevronDown, ChevronRight, FlaskConical, Play, RotateCcw, Save, ShieldCheck, SlidersHorizontal, TrendingUp } from 'lucide-react'
+import { api, type BacktestResp, type FullParams, type ParamsResp } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
-import { asMarkers, priceWithSignals } from './charts'
-import { fmt, pct, TIER_TEXT } from './temperature'
+import { pct, TIER_TEXT } from './temperature'
+import { useTheme } from './theme'
+import BacktestSignals from './BacktestSignals'
 import Robustness from './Robustness'
 
 type Field = { path: string; label: string; step?: number; hint?: string; bool?: boolean }
-type Group = { title: string; fields: Field[] }
+type Group = { title: string; defaultOpen?: boolean; fields: Field[] }
+type TabKey = 'equity' | 'signals' | 'robust'
 
-// 参数表单定义：path 为参数 JSON 中的路径（signal.xxx 为状态机参数，weights.N 为维度权重）
 const SCHEMA: Group[] = [
   {
     title: '规则开关',
+    defaultOpen: true,
     fields: [
       { path: 'skipTPct', label: '去掉二次分位（方案 C）', bool: true, hint: '温度直接用加权得分平滑，不再取近 3 年分位' },
       { path: 'signal.topOnlyExpensive', label: '顶部信号只在估值昂贵时', bool: true, hint: '估值便宜/合理时不发卖出信号' },
@@ -19,6 +22,7 @@ const SCHEMA: Group[] = [
   },
   {
     title: '分层持仓',
+    defaultOpen: true,
     fields: [
       { path: 'position.baseCheap', label: '底仓（便宜）', step: 0.05 },
       { path: 'position.baseFair', label: '底仓（合理）', step: 0.05 },
@@ -70,7 +74,7 @@ const SCHEMA: Group[] = [
     ],
   },
   {
-    title: '通用',
+    title: '状态机通用',
     fields: [
       { path: 'signal.minExtremeDims', label: '武装需极端维度数' },
       { path: 'signal.divergenceGap', label: '背离幅度' },
@@ -79,6 +83,14 @@ const SCHEMA: Group[] = [
     ],
   },
 ]
+
+const STRAT_META: Record<string, { short: string; colorVar: string; rule: string }> = {
+  thermometer: { short: '温度计', colorVar: '--accent', rule: '温度计底部信号满仓，顶部信号空仓（观察级不入仓）' },
+  layered: { short: '分层持仓', colorVar: '--t-cold-2', rule: '按估值档设定底仓，再用温度计底部/顶部信号加减仓' },
+  valuation: { short: '估值档', colorVar: '--t-hot-1', rule: '估值进入便宜档满仓，进入昂贵档空仓' },
+  ma200: { short: '200日均线', colorVar: '--dim-2', rule: '收盘价站上 200 日均线满仓，跌破空仓' },
+  hold: { short: '买入持有', colorVar: '--ink-2', rule: '全程 100% 满仓沪深300（基准对照）' },
+}
 
 function getPath(p: FullParams, path: string): unknown {
   return path.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], p)
@@ -93,22 +105,9 @@ function setPath(p: FullParams, path: string, v: number | boolean): FullParams {
   return next
 }
 
-const SOURCE_TEXT: Record<string, string> = { thermometer: '温度计', valuation: '估值档', ma200: '200 日均线' }
-const PERIOD_TEXT: Record<string, string> = { all: '全部', in: '样本内', out: '样本外' }
-
-/** A 股习惯：涨红跌绿。信号是否有效看胜率（底部信号以上涨为胜，顶部信号以下跌为胜）。 */
 function dirClass(x: number | null) {
   if (x === null || Math.abs(x) < 0.0005) return ''
   return x > 0 ? 'up' : 'down'
-}
-
-function StatCells({ h }: { h: HStat }) {
-  return (
-    <>
-      <td className={`num mono ${dirClass(h.median)}`}>{pct(h.median)}</td>
-      <td className="num mono muted">{h.winRate === null ? '—' : `${Math.round(h.winRate * 100)}%`}</td>
-    </>
-  )
 }
 
 export default function Backtest() {
@@ -117,22 +116,31 @@ export default function Backtest() {
   const [from, setFrom] = useState('2014-01-01')
   const [split, setSplit] = useState('2021-01-01')
   const [res, setRes] = useState<BacktestResp | null>(null)
+  const [tab, setTab] = useState<TabKey>('equity')
+  const [selectedStrat, setSelectedStrat] = useState<string>('layered')
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(SCHEMA.map((g) => [g.title, !!g.defaultOpen])),
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [name, setName] = useState('')
+  const { theme } = useTheme()
 
-  const run = useCallback(async (p: FullParams | null) => {
-    setBusy(true)
-    setError('')
-    try {
-      setRes(await api.backtest(p, { from, split }))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }, [from, split])
+  const run = useCallback(
+    async (p: FullParams | null) => {
+      setBusy(true)
+      setError('')
+      try {
+        setRes(await api.backtest(p, { from, split }))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [from, split],
+  )
 
   const loadMeta = useCallback(() => {
     return api.params().then((m) => {
@@ -144,8 +152,10 @@ export default function Backtest() {
   }, [])
 
   useEffect(() => {
-    loadMeta().then((p) => run(p), (e) => setError(e.message))
-    // 只在进入页面时自动运行一次
+    loadMeta().then(
+      (p) => run(p),
+      (e) => setError(e.message),
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -166,239 +176,638 @@ export default function Backtest() {
   }
 
   const r = res?.result
+  const activeStratObj = r?.strategies.find((s) => s.name === selectedStrat) ?? r?.strategies[0]
+  const activeMeta = STRAT_META[activeStratObj?.name ?? 'layered'] ?? STRAT_META.layered
+
+  // 净值对比图：高亮当前选中策略，其余弱化，并标出样本外分界线
   const equityOption = useMemo<EChartsOption | null>(() => {
     if (!r || r.dates.length === 0) return null
-    const ink = cssVar('--ink-2'), line = cssVar('--line')
-    const colors: Record<string, string> = {
-      thermometer: cssVar('--accent'), layered: cssVar('--t-cold-2'), valuation: cssVar('--t-hot-1'), ma200: cssVar('--dim-2'), hold: ink,
-    }
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const splitDate = r.dates.find((d) => d >= split)
     return {
       animation: false,
-      grid: { left: 56, right: 24, top: 36, bottom: 56 },
-      tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(3) : String(v)) },
-      legend: { top: 0, left: 0, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
-      xAxis: { type: 'category', data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 8, borderColor: line, textStyle: { color: ink } }],
-      series: r.strategies.map((s) => ({
-        name: s.label, type: 'line', data: s.equity, showSymbol: false,
-        lineStyle: { width: s.name === 'thermometer' ? 2 : 1.2, color: colors[s.name] }, itemStyle: { color: colors[s.name] },
-      })),
+      grid: { left: 52, right: 24, top: 36, bottom: 52 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(3) : String(v)),
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
+      xAxis: {
+        type: 'category',
+        data: r.dates,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: line } },
+        axisTick: { show: false },
+        axisLabel: { color: ink, fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        splitLine: { lineStyle: { color: line, type: 'dashed' } },
+        axisLabel: { color: ink, fontSize: 11 },
+      },
+      dataZoom: [
+        { type: 'inside' },
+        { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+      ],
+      series: r.strategies.map((s, idx) => {
+        const c = cssVar(STRAT_META[s.name]?.colorVar ?? '--ink-2')
+        const isSel = s.name === (activeStratObj?.name ?? '')
+        return {
+          name: s.label,
+          type: 'line',
+          data: s.equity,
+          showSymbol: false,
+          z: isSel ? 10 : 2,
+          lineStyle: { width: isSel ? 2.6 : 1.25, color: c, opacity: isSel ? 1 : 0.45 },
+          itemStyle: { color: c },
+          markLine:
+            idx === 0 && splitDate
+              ? {
+                  symbol: 'none',
+                  silent: true,
+                  lineStyle: { color: cssVar('--warn'), type: 'dashed', width: 1.2, opacity: 0.7 },
+                  label: { formatter: '样本外 →', color: cssVar('--warn'), fontSize: 11, position: 'insideEndTop' },
+                  data: [{ xAxis: splitDate }],
+                }
+              : undefined,
+        }
+      }),
     }
-  }, [r])
+  }, [r, activeStratObj?.name, split, theme])
 
-  const priceOption = useMemo(() => (r ? priceWithSignals(r.dates, r.close, asMarkers(r.events)) : null), [r])
+  // 选中策略对应的买卖信号点 + 每日仓位双联图
+  const inspector = useMemo(() => {
+    if (!r || !activeStratObj || r.dates.length === 0) return null
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const buyColor = cssVar('--t-cold-2')
+    const sellColor = cssVar('--t-hot-2')
+    const stratColor = cssVar(activeMeta.colorVar)
+    const splitDate = r.dates.find((d) => d >= split)
 
-  const groups = r?.groups ?? []
-  const horizons = r?.config.horizons ?? []
-  const thermoSignals = (r?.signals ?? []).filter((s) => s.source === 'thermometer').slice().reverse()
+    const allSigs = r.signals ?? []
+    const stratName = activeStratObj.name
+    const matched = allSigs.filter((s) => {
+      if (stratName === 'thermometer') return s.source === 'thermometer'
+      if (stratName === 'layered') return s.source === 'thermometer' || s.source === 'valuation'
+      if (stratName === 'valuation') return s.source === 'valuation'
+      if (stratName === 'ma200') return s.source === 'ma200'
+      return false
+    })
+
+    const marks = matched
+      .filter((s) => s.close !== null)
+      .map((s) => {
+        const isBuy = s.side > 0
+        const isValInLayered = stratName === 'layered' && s.source === 'valuation'
+        const color = isValInLayered ? cssVar('--t-hot-1') : isBuy ? buyColor : sellColor
+        const label =
+          s.source === 'valuation'
+            ? isBuy
+              ? '估值进入便宜'
+              : '估值进入昂贵'
+            : s.source === 'ma200'
+              ? isBuy
+                ? '上穿 MA200 买入'
+                : '跌破 MA200 卖出'
+              : isBuy
+                ? s.observe
+                  ? '温度计底部（观察·不入仓）'
+                  : '温度计底部买入'
+                : '温度计顶部卖出'
+        return {
+          coord: [s.date, s.close],
+          symbol: isValInLayered ? 'diamond' : isBuy ? 'triangle' : 'path://M0,0 L10,0 L5,10 Z',
+          symbolSize: isValInLayered ? 9 : 11,
+          symbolOffset: [0, isValInLayered ? 0 : isBuy ? 12 : -12],
+          itemStyle: s.observe ? { color: 'transparent', borderColor: color, borderWidth: 1.5 } : { color },
+          label: { show: false },
+          name: label,
+        }
+      })
+
+    const hasPos = !!activeStratObj.position && activeStratObj.position.length === r.dates.length
+    const posPct = hasPos ? activeStratObj.position!.map((p) => +(p * 100).toFixed(1)) : []
+
+    const option: EChartsOption = {
+      animation: false,
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+      },
+      grid: hasPos
+        ? [
+            { left: 56, right: 24, top: 24, height: '56%' },
+            { left: 56, right: 24, top: '70%', bottom: 48 },
+          ]
+        : [{ left: 56, right: 24, top: 24, bottom: 52 }],
+      xAxis: hasPos
+        ? [
+            { type: 'category', data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { show: false }, axisTick: { show: false } },
+            { type: 'category', gridIndex: 1, data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisTick: { show: false }, axisLabel: { color: ink, fontSize: 11 } },
+          ]
+        : [{ type: 'category', data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisTick: { show: false }, axisLabel: { color: ink, fontSize: 11 } }],
+      yAxis: hasPos
+        ? [
+            { type: 'value', scale: true, name: '沪深300', nameTextStyle: { color: ink, fontSize: 11 }, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } },
+            { type: 'value', gridIndex: 1, min: 0, max: 100, interval: 50, name: '仓位%', nameTextStyle: { color: ink, fontSize: 11 }, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` } },
+          ]
+        : [{ type: 'value', scale: true, name: '沪深300', nameTextStyle: { color: ink, fontSize: 11 }, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } }],
+      dataZoom: [
+        { type: 'inside', xAxisIndex: hasPos ? [0, 1] : [0] },
+        { type: 'slider', xAxisIndex: hasPos ? [0, 1] : [0], height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } },
+      ],
+      series: [
+        {
+          name: '沪深300',
+          type: 'line',
+          data: r.close,
+          showSymbol: false,
+          lineStyle: { width: 1.5, color: inkMain, opacity: 0.85 },
+          itemStyle: { color: inkMain },
+          markPoint: marks.length
+            ? {
+                data: marks,
+                tooltip: {
+                  formatter: (p: { name: string; data: { coord: [string, number] } }) => `${p.data.coord[0]} · ${p.name}`,
+                },
+              }
+            : undefined,
+          markLine: splitDate
+            ? {
+                symbol: 'none',
+                silent: true,
+                lineStyle: { color: cssVar('--warn'), type: 'dashed', width: 1, opacity: 0.65 },
+                label: { show: false },
+                data: [{ xAxis: splitDate }],
+              }
+            : undefined,
+        },
+        ...(hasPos
+          ? [
+              {
+                name: `${activeMeta.short}仓位`,
+                type: 'line' as const,
+                step: 'end' as const,
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                showSymbol: false,
+                data: posPct,
+                lineStyle: { width: 1.8, color: stratColor },
+                itemStyle: { color: stratColor },
+                areaStyle: { color: stratColor, opacity: 0.16 },
+              },
+            ]
+          : []),
+      ],
+    }
+
+    return { option, count: matched.length, hasPos }
+  }, [r, activeStratObj, activeMeta, split, theme])
+
+  const thermoSignals = (r?.signals ?? []).filter((s) => s.source === 'thermometer')
+  const stratOf = (k: string) => r?.strategies.find((s) => s.name === k)
+  const layered = stratOf('layered')
+  const thermo = stratOf('thermometer')
+  const valBase = stratOf('valuation')
+  const holdBase = stratOf('hold')
+  const focusStrat = layered ?? thermo
 
   return (
     <div className="page">
-      <div className="page-head">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1>回测</h1>
-          <p className="sub">
-            调整参数后在本地数据上重算并评估信号，不会改动线上结果；满意后可保存为参数集并设为生效。
-            {res && <span className="muted"> 本次耗时 {res.elapsedMs} ms。</span>}
+          <div className="flex items-center gap-2.5">
+            <h1 className="m-0">策略回测</h1>
+            {res && (
+              <span className={`tag ${dirty ? 'tag-warn' : 'tag-ok'}`}>
+                {dirty ? `试验参数 ${res.paramsVersion}` : '与线上生效参数一致'}
+              </span>
+            )}
+          </div>
+          <p className="sub mt-1">
+            本地数据即时重算，不改动线上结果；点击下方任意策略行即可联动查看其买卖点与每日仓位。
+            {res && <span className="mono"> · 本次耗时 {res.elapsedMs} ms</span>}
           </p>
         </div>
       </div>
 
-      {error && <div className="error" role="alert">{error}</div>}
-      {notice && <div className="ok-note" role="status">{notice}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="ok-note" role="status">
+          {notice}
+        </div>
+      )}
 
-      <div className="bt-layout">
-        <aside className="panel bt-form">
-          <div className="bt-form-head">
-            <strong>参数</strong>
-            {res && (
-              <span className={`tag ${dirty ? 'tag-warn' : 'tag-ok'}`}>{dirty ? `试验参数 ${res.paramsVersion}` : '与生效参数一致'}</span>
-            )}
-          </div>
-          <div className="bt-range">
-            <label className="field-inline"><span>回测起点</span><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-            <label className="field-inline"><span>样本外起点</span><input type="date" value={split} onChange={(e) => setSplit(e.target.value)} /></label>
-          </div>
-          {params && SCHEMA.map((g) => (
-            <fieldset key={g.title} className="bt-group">
-              <legend>{g.title}</legend>
-              {g.fields.map((f) => (
-                f.bool ? (
-                  <label key={f.path} className="field-check" title={f.hint}>
-                    <input type="checkbox" checked={!!getPath(params, f.path)} onChange={(e) => setParams(setPath(params, f.path, e.target.checked))} />
-                    <span>{f.label}</span>
-                  </label>
-                ) : (
-                <label key={f.path} className="field-inline" title={f.hint}>
-                  <span>{f.label}</span>
-                  <input
-                    type="number"
-                    step={f.step ?? 1}
-                    value={(getPath(params, f.path) as number) ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.valueAsNumber
-                      if (!Number.isNaN(v)) setParams(setPath(params, f.path, v))
-                    }}
-                  />
-                </label>
-                )
-              ))}
-            </fieldset>
-          ))}
-          <div className="bt-actions">
-            <button className="btn btn-primary" disabled={busy || !params} onClick={() => run(params)}>
-              {busy ? '运行中…' : '运行回测'}
-            </button>
-            <button className="btn" disabled={busy || !active} onClick={() => { const p = structuredClone(active!.params); setParams(p); run(p) }}>
-              恢复生效参数
-            </button>
-            <button className="btn btn-ghost" disabled={busy || !meta} onClick={() => setParams(structuredClone(meta!.defaults))}>
-              填入默认值
-            </button>
-          </div>
-          <div className="bt-save">
-            <input placeholder="参数集名称" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
-            <button className="btn" disabled={!name.trim()} onClick={() => save(false)}>保存</button>
-            <button className="btn" disabled={!name.trim()} onClick={() => { if (confirm('设为生效后，总览、信号与后续推送都将按这组参数计算。确定？')) save(true) }}>
-              保存并生效
-            </button>
-          </div>
-          {meta && meta.sets.length > 1 && (
-            <div className="bt-sets">
-              <div className="muted">已保存的参数集</div>
-              {meta.sets.map((s) => (
-                <button key={s.version} className="link" onClick={() => setParams(structuredClone(s.params))}>
-                  {s.name || s.version} <span className="muted mono">{s.version}</span>{s.active && ' · 生效中'}
-                </button>
-              ))}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[310px_1fr] xl:items-start">
+        {/* 左侧手风琴参数面板 + 吸顶操作条 */}
+        <aside className="panel flex flex-col overflow-hidden xl:sticky xl:top-[72px] xl:max-h-[calc(100vh-92px)]">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--bg-subtle)] px-4 py-3">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ink)]">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-[var(--accent)]" />
+              参数配置
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="btn btn-ghost h-7 px-2 text-xs"
+                disabled={busy || !active}
+                title="恢复当前线上生效参数"
+                onClick={() => {
+                  const p = structuredClone(active!.params)
+                  setParams(p)
+                  run(p)
+                }}
+              >
+                <RotateCcw className="h-3 w-3" />
+                恢复
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary h-7 px-2.5 text-xs"
+                disabled={busy || !params}
+                onClick={() => run(params)}
+              >
+                <Play className="h-3 w-3" />
+                {busy ? '计算中…' : '运行'}
+              </button>
             </div>
-          )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <div className="space-y-2 pb-3">
+              <label className="field-inline">
+                <span>回测起点</span>
+                <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              </label>
+              <label className="field-inline">
+                <span>样本外分界</span>
+                <input type="date" value={split} onChange={(e) => setSplit(e.target.value)} />
+              </label>
+            </div>
+
+            {params && (
+              <div className="divide-y divide-[var(--line)] border-t border-[var(--line)]">
+                {SCHEMA.map((g) => {
+                  const isOpen = !!openGroups[g.title]
+                  return (
+                    <div key={g.title} className="py-2">
+                      <button
+                        type="button"
+                        onClick={() => setOpenGroups((o) => ({ ...o, [g.title]: !o[g.title] }))}
+                        className="flex w-full items-center justify-between py-1 text-left text-xs font-semibold text-[var(--ink)] hover:text-[var(--accent)]"
+                      >
+                        <span>{g.title}</span>
+                        {isOpen ? (
+                          <ChevronDown className="h-3.5 w-3.5 text-[var(--ink-3)]" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 text-[var(--ink-3)]" />
+                        )}
+                      </button>
+                      {isOpen && (
+                        <div className="mt-2 space-y-2 pb-1">
+                          {g.fields.map((f) =>
+                            f.bool ? (
+                              <label key={f.path} className="field-check text-xs" title={f.hint}>
+                                <input
+                                  type="checkbox"
+                                  className="accent-[var(--accent)]"
+                                  checked={!!getPath(params, f.path)}
+                                  onChange={(e) => setParams(setPath(params, f.path, e.target.checked))}
+                                />
+                                <span>{f.label}</span>
+                              </label>
+                            ) : (
+                              <label key={f.path} className="field-inline text-xs" title={f.hint}>
+                                <span>{f.label}</span>
+                                <input
+                                  type="number"
+                                  step={f.step ?? 1}
+                                  value={(getPath(params, f.path) as number) ?? ''}
+                                  onChange={(e) => {
+                                    const v = e.target.valueAsNumber
+                                    if (!Number.isNaN(v)) setParams(setPath(params, f.path, v))
+                                  }}
+                                />
+                              </label>
+                            ),
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="mt-3 space-y-2.5 border-t border-[var(--line)] pt-3">
+              <div className="flex items-center gap-1.5">
+                <input
+                  className="h-8 min-w-0 flex-1 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2.5 text-xs text-[var(--ink)] placeholder:text-[var(--ink-3)] focus:border-[var(--accent)] focus:outline-none"
+                  placeholder="命名以保存参数集…"
+                  value={name}
+                  maxLength={40}
+                  onChange={(e) => setName(e.target.value)}
+                />
+                <button className="btn h-8 px-2.5 text-xs" disabled={!name.trim()} onClick={() => save(false)} title="仅保存">
+                  <Save className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  className="btn btn-primary h-8 px-2.5 text-xs"
+                  disabled={!name.trim()}
+                  onClick={() => {
+                    if (confirm('设为生效后，总览、信号与后续推送都将按这组参数计算。确定？')) save(true)
+                  }}
+                >
+                  生效
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[var(--ink-3)]">快速载入</span>
+                <button
+                  type="button"
+                  className="link text-xs"
+                  disabled={busy || !meta}
+                  onClick={() => setParams(structuredClone(meta!.defaults))}
+                >
+                  填入默认值
+                </button>
+              </div>
+              {meta && meta.sets.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  {meta.sets.map((s) => (
+                    <button
+                      key={s.version}
+                      type="button"
+                      onClick={() => setParams(structuredClone(s.params))}
+                      className="flex items-center justify-between rounded-md px-2 py-1 text-left text-xs text-[var(--ink-2)] hover:bg-[var(--panel-2)] hover:text-[var(--ink)]"
+                    >
+                      <span className="truncate">{s.name || s.version}</span>
+                      <span className="mono shrink-0 text-[11px] text-[var(--ink-3)]">
+                        {s.active ? <span className="text-[var(--ok)]">生效中</span> : s.version.slice(0, 6)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </aside>
 
-        <div className="bt-results">
-          {r && r.days > 0 && (
+        {/* 右侧：核心结论 KPI 条 + 3 个工作区 Tab */}
+        <div className="flex min-w-0 flex-col gap-4">
+          {r && r.days > 0 && focusStrat && (
+            <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
+              <div className="panel p-4">
+                <div className="text-xs text-[var(--ink-2)]">{focusStrat.label} · 总收益</div>
+                <div className={`mt-1 text-2xl font-bold tracking-tight mono ${dirClass(focusStrat.totalRet)}`}>
+                  {pct(focusStrat.totalRet)}
+                </div>
+                <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+                  年化 {pct(focusStrat.cagr)} · 持仓 {Math.round(focusStrat.exposure * 100)}%
+                </div>
+              </div>
+              <div className="panel p-4">
+                <div className="text-xs text-[var(--ink-2)]">{focusStrat.label} · 最大回撤</div>
+                <div className="mt-1 text-2xl font-bold tracking-tight mono down">{pct(focusStrat.maxDD)}</div>
+                <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+                  估值档 {valBase ? pct(valBase.maxDD) : '—'} · 持有 {holdBase ? pct(holdBase.maxDD) : '—'}
+                </div>
+              </div>
+              <div className="panel p-4">
+                <div className="text-xs text-[var(--ink-2)]">估值档基线总收益</div>
+                <div className={`mt-1 text-2xl font-bold tracking-tight mono ${dirClass(valBase?.totalRet ?? null)}`}>
+                  {valBase ? pct(valBase.totalRet) : '—'}
+                </div>
+                <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+                  {valBase
+                    ? focusStrat.totalRet >= valBase.totalRet
+                      ? `跑赢估值档 ${pct(focusStrat.totalRet - valBase.totalRet)}`
+                      : `落后估值档 ${pct(focusStrat.totalRet - valBase.totalRet)}`
+                    : ''}
+                </div>
+              </div>
+              <div className="panel p-4">
+                <div className="text-xs text-[var(--ink-2)]">买入持有总收益</div>
+                <div className={`mt-1 text-2xl font-bold tracking-tight mono ${dirClass(holdBase?.totalRet ?? null)}`}>
+                  {holdBase ? pct(holdBase.totalRet) : '—'}
+                </div>
+                <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+                  温度计触发 {thermoSignals.length} 次信号
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 下划线式工作区 Tab 栏 */}
+          <div className="tabs-bar" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'equity'}
+              className={`tab-btn ${tab === 'equity' ? 'on' : ''}`}
+              onClick={() => setTab('equity')}
+            >
+              <TrendingUp className="h-4 w-4" />
+              收益与策略拆解
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'signals'}
+              className={`tab-btn ${tab === 'signals' ? 'on' : ''}`}
+              onClick={() => setTab('signals')}
+            >
+              <FlaskConical className="h-4 w-4" />
+              信号事后评估
+              {thermoSignals.length > 0 && <span className="tag tag-muted">{thermoSignals.length}</span>}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'robust'}
+              className={`tab-btn ${tab === 'robust' ? 'on' : ''}`}
+              onClick={() => setTab('robust')}
+            >
+              <ShieldCheck className="h-4 w-4" />
+              稳健性与相关性
+            </button>
+          </div>
+
+          {r && r.days === 0 && <div className="panel empty">所选区间没有数据。</div>}
+
+          {r && r.days > 0 && tab === 'equity' && (
             <>
-              <section className="panel">
-                <div className="panel-head">
-                  <strong>模拟持仓</strong>
-                  <span className="muted">{r.from} ~ {r.to}，信号次日生效，不计交易成本</span>
-                </div>
-                <table className="table static">
-                  <thead>
-                    <tr><th>策略</th><th className="num">总收益</th><th className="num">年化</th><th className="num">最大回撤</th><th className="num">持仓占比</th><th className="num">开平仓</th></tr>
-                  </thead>
-                  <tbody>
-                    {r.strategies.map((s) => (
-                      <tr key={s.name} className={s.name === 'thermometer' || s.name === 'layered' ? 'emph' : ''}>
-                        <td>{s.label}</td>
-                        <td className="num mono">{pct(s.totalRet)}</td>
-                        <td className="num mono">{pct(s.cagr)}</td>
-                        <td className="num mono">{pct(s.maxDD)}</td>
-                        <td className="num mono">{Math.round(s.exposure * 100)}%</td>
-                        <td className="num mono">{s.switches}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {equityOption && <EChart option={equityOption} height={300} />}
-              </section>
-
-              <section className="panel">
-                <div className="panel-head">
-                  <strong>信号事后表现</strong>
-                  <span className="muted">指数涨跌幅中位数（红涨绿跌）/ 胜率：底部信号以上涨为胜，顶部信号以下跌为胜。观察级信号不计入。</span>
+              <section className="panel overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3">
+                  <div className="flex items-center gap-2">
+                    <strong className="text-sm font-semibold">策略收益对比</strong>
+                    <span className="text-xs text-[var(--ink-2)]">
+                      {r.from} ~ {r.to}，点击任意行高亮曲线并联动查看下方买卖点与仓位
+                    </span>
+                  </div>
                 </div>
                 <div className="table-scroll">
-                  <table className="table static stats">
+                  <table className="table">
                     <thead>
                       <tr>
-                        <th>信号</th><th>区间</th><th className="num">次数</th>
-                        {horizons.map((h) => <th key={h} className="num" colSpan={2}>{h} 日</th>)}
-                        <th className="num">MAE 中位</th>
+                        <th>策略（点击切换检视）</th>
+                        <th className="num">总收益</th>
+                        <th className="num">年化</th>
+                        <th className="num">最大回撤</th>
+                        <th className="num">平均仓位</th>
+                        <th className="num">调仓次数</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="base">
-                        <td>任意一天买入（基准）</td><td>全部</td><td className="num mono">—</td>
-                        {r.baseRate.map((h, i) => <StatCells key={i} h={h} />)}
-                        <td className="num mono">—</td>
-                      </tr>
-                      {groups.map((g: BtGroup, i) => (
-                        <tr key={i} className={g.period === 'all' ? 'group-first' : 'sub'}>
-                          <td>{g.period === 'all' ? `${SOURCE_TEXT[g.source]} · ${g.side > 0 ? '底部 / 买' : '顶部 / 卖'}` : ''}</td>
-                          <td>{PERIOD_TEXT[g.period]}</td>
-                          <td className="num mono">{g.n}</td>
-                          {g.horizons.map((h, k) => <StatCells key={k} h={h} />)}
-                          <td className="num mono">{pct(g.maeMedian)}</td>
-                        </tr>
-                      ))}
+                      {r.strategies.map((s) => {
+                        const m = STRAT_META[s.name]
+                        const isSel = s.name === activeStratObj?.name
+                        return (
+                          <tr
+                            key={s.name}
+                            onClick={() => setSelectedStrat(s.name)}
+                            className={isSel ? 'selected' : ''}
+                          >
+                            <td>
+                              <div className="flex items-center gap-2.5">
+                                <span
+                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                  style={{ background: `var(${m?.colorVar ?? '--ink-2'})` }}
+                                />
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={isSel ? 'font-semibold text-[var(--accent)]' : 'font-medium'}>
+                                      {s.label}
+                                    </span>
+                                    {isSel && <span className="tag tag-cold">正在检视</span>}
+                                  </div>
+                                  {m && <div className="text-[11.5px] text-[var(--ink-3)]">{m.rule}</div>}
+                                </div>
+                              </div>
+                            </td>
+                            <td className={`num mono font-semibold ${dirClass(s.totalRet)}`}>{pct(s.totalRet)}</td>
+                            <td className={`num mono ${dirClass(s.cagr)}`}>{pct(s.cagr)}</td>
+                            <td className="num mono down">{pct(s.maxDD)}</td>
+                            <td className="num mono">{Math.round(s.exposure * 100)}%</td>
+                            <td className="num mono">{s.switches}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
-                <p className="foot muted">
-                  样本外以 {split} 为界。样本量小（尤其样本内），差异可能只是偶然；参数改动后应同时看样本外是否仍然成立。
-                </p>
+                {equityOption && (
+                  <div className="border-t border-[var(--line)] p-3">
+                    <EChart option={equityOption} height={320} />
+                  </div>
+                )}
               </section>
 
-              {priceOption && (
-                <section className="panel">
-                  <div className="panel-head"><strong>信号位置</strong><span className="muted">▲ 底部，▼ 顶部，空心为观察级</span></div>
-                  <EChart option={priceOption} height={340} />
-                </section>
-              )}
+              {inspector && activeStratObj && (
+                <section className="panel overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ background: `var(${activeMeta.colorVar})` }}
+                        />
+                        <strong className="text-sm font-semibold">
+                          {activeStratObj.label} · 买卖点与仓位变化
+                        </strong>
+                        <span className="tag tag-muted mono">
+                          {activeStratObj.switches} 次调仓 · 平均仓位 {Math.round(activeStratObj.exposure * 100)}%
+                        </span>
+                      </div>
+                      <p className="mt-1 mb-0 text-xs text-[var(--ink-2)]">
+                        {activeMeta.rule}
+                        {activeStratObj.name === 'layered' && '（▲▼ 为温度计加减仓信号，◆ 为估值档底仓切换点）'}
+                        {activeStratObj.name === 'thermometer' && '（▲ 底部买入，▼ 顶部卖出，空心为估值昂贵时的观察级不入仓）'}
+                      </p>
+                    </div>
 
-              <section className="panel">
-                <div className="panel-head"><strong>温度计信号明细</strong><span className="muted">{thermoSignals.length} 个</span></div>
-                <div className="table-scroll">
-                  <table className="table static">
-                    <thead>
-                      <tr>
-                        <th>日期</th><th>信号</th><th className="num">收盘</th><th className="num">T_s</th><th>估值</th>
-                        {horizons.map((h) => <th key={h} className="num">{h} 日</th>)}
-                        <th className="num">MAE</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {thermoSignals.map((s, i) => (
-                        <tr key={i} title={s.reason}>
-                          <td className="mono">{s.date}</td>
-                          <td>
-                            <span className={`tag ${s.side > 0 ? 'tag-cold' : 'tag-hot'}`}>{s.side > 0 ? '底部' : '顶部'}</span>
-                            {s.observe && <span className="tag tag-muted" style={{ marginLeft: 4 }}>观察</span>}
-                          </td>
-                          <td className="num mono">{fmt(s.close, 2)}</td>
-                          <td className="num mono">{fmt(s.tS)}</td>
-                          <td>{s.tier ? TIER_TEXT[s.tier] : '—'}</td>
-                          {s.rets.map((x, k) => <td key={k} className={`num mono ${dirClass(x)}`}>{pct(x)}</td>)}
-                          <td className="num mono">{pct(s.mae)}</td>
-                        </tr>
+                    <div className="seg">
+                      {r.strategies.map((s) => (
+                        <button
+                          key={s.name}
+                          type="button"
+                          className={s.name === activeStratObj.name ? 'on' : ''}
+                          onClick={() => setSelectedStrat(s.name)}
+                        >
+                          {STRAT_META[s.name]?.short ?? s.label}
+                        </button>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              {r.corr && r.corrNames && (
-                <section className="panel">
-                  <div className="panel-head"><strong>维度相关系数</strong><span className="muted">两两相关 &gt; 0.8 时考虑合并</span></div>
-                  <table className="table static corr">
-                    <thead><tr><th></th>{r.corrNames.map((n) => <th key={n} className="num">{n}</th>)}</tr></thead>
-                    <tbody>
-                      {r.corr.map((row, i) => (
-                        <tr key={i}>
-                          <td>{r.corrNames![i]}</td>
-                          {row.map((x, k) => <td key={k} className={`num mono ${x !== null && i !== k && Math.abs(x) > 0.8 ? 'warn-text' : ''}`}>{x === null ? '—' : x.toFixed(2)}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
+                  <div className="p-3">
+                    <EChart option={inspector.option} height={inspector.hasPos ? 420 : 320} />
+                  </div>
                 </section>
               )}
             </>
           )}
-          {r && r.days === 0 && <div className="panel empty">所选区间没有数据。</div>}
-          <Robustness params={params} from={from} split={split} />
+
+          {r && r.days > 0 && tab === 'signals' && <BacktestSignals r={r} split={split} />}
+
+          {tab === 'robust' && (
+            <>
+              <Robustness params={params} from={from} split={split} />
+              {r && r.corr && r.corrNames && (
+                <section className="panel overflow-hidden">
+                  <div className="panel-head border-b border-[var(--line)]">
+                    <strong>维度相关系数</strong>
+                    <span className="muted text-xs">两两相关 &gt; 0.8 时可考虑合并或降权</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="table static corr">
+                      <thead>
+                        <tr>
+                          <th></th>
+                          {r.corrNames.map((n) => (
+                            <th key={n} className="num">
+                              {n}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {r.corr.map((row, i) => (
+                          <tr key={i}>
+                            <td className="font-medium">{r.corrNames![i]}</td>
+                            {row.map((x, k) => (
+                              <td
+                                key={k}
+                                className={`num mono ${x !== null && i !== k && Math.abs(x) > 0.8 ? 'warn-text' : ''}`}
+                              >
+                                {x === null ? '—' : x.toFixed(2)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>

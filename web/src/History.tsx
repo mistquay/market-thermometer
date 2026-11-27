@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Activity, ArrowDownRight, ArrowUpRight, Flame, Snowflake, TrendingUp } from 'lucide-react'
 import { api, type ScoreSeries } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
+import { pct } from './temperature'
+import { useTheme } from './theme'
 
 const RANGES = [
   { key: '1y', label: '1 年', years: 1 },
@@ -10,59 +13,121 @@ const RANGES = [
 ] as const
 
 const DIMS = [
-  { key: 't1', label: '资金热度' },
-  { key: 't2', label: '杠杆情绪' },
-  { key: 't3', label: '市场广度' },
-  { key: 't4', label: '价格动量' },
+  { key: 't1', label: '资金热度', varName: '--dim-1' },
+  { key: 't2', label: '杠杆情绪', varName: '--dim-2' },
+  { key: 't3', label: '市场广度', varName: '--t-cold-1' },
+  { key: 't4', label: '价格动量', varName: '--dim-4' },
 ] as const
+
+type DimKey = (typeof DIMS)[number]['key']
 
 export default function History() {
   const [data, setData] = useState<ScoreSeries | null>(null)
   const [error, setError] = useState('')
   const [range, setRange] = useState<(typeof RANGES)[number]['key']>('5y')
-  const [showDims, setShowDims] = useState(false)
+  const [activeDims, setActiveDims] = useState<Record<DimKey, boolean>>({
+    t1: false,
+    t2: false,
+    t3: false,
+    t4: false,
+  })
+  const { theme } = useTheme()
 
   useEffect(() => {
     api.scores().then(setData, (e) => setError(e.message))
   }, [])
 
-  // 只展示 T_s 或 V 已经有值的区间，跳过预热期
   const firstUseful = useMemo(() => {
     if (!data) return 0
     const i = data.series.tS.findIndex((x) => x !== null)
     return i < 0 ? 0 : i
   }, [data])
 
-  const option = useMemo<EChartsOption | null>(() => {
+  const sliceInfo = useMemo(() => {
     if (!data || data.dates.length === 0) return null
-    const ink = cssVar('--ink-2'), line = cssVar('--line'), accent = cssVar('--accent')
-    const cold = cssVar('--t-cold-bg'), hot = cssVar('--t-hot-bg')
-    const th = data.thresholds
     const dates = data.dates.slice(firstUseful)
-    const col = (k: keyof ScoreSeries['series']) => data.series[k].slice(firstUseful)
-
     const r = RANGES.find((x) => x.key === range)!
-    let startValue = dates[0]
+    let startIdx = 0
     if (r.years > 0) {
       const d = new Date(dates[dates.length - 1])
       d.setFullYear(d.getFullYear() - r.years)
       const iso = d.toISOString().slice(0, 10)
-      startValue = dates.find((x) => x >= iso) ?? dates[0]
+      const idx = dates.findIndex((x) => x >= iso)
+      startIdx = idx < 0 ? 0 : idx
     }
+    const closes = data.series.close.slice(firstUseful + startIdx).filter((x): x is number => x !== null)
+    const tss = data.series.tS.slice(firstUseful + startIdx).filter((x): x is number => x !== null)
+    const vs = data.series.v.slice(firstUseful + startIdx).filter((x): x is number => x !== null)
+    const th = data.thresholds
+
+    const cFirst = closes[0] ?? null
+    const cLast = closes[closes.length - 1] ?? null
+    const cRet = cFirst && cLast ? cLast / cFirst - 1 : null
+    const cHigh = closes.length ? Math.max(...closes) : null
+    const cLow = closes.length ? Math.min(...closes) : null
+
+    const tsLast = tss[tss.length - 1] ?? null
+    const tsAvg = tss.length ? tss.reduce((a, b) => a + b, 0) / tss.length : null
+    const coldDays = tss.filter((x) => x <= th.extreme).length
+    const hotDays = tss.filter((x) => x >= 100 - th.extreme).length
+
+    const vLast = vs[vs.length - 1] ?? null
+    const cheapDays = vs.filter((x) => x <= th.cheap).length
+    const expDays = vs.filter((x) => x >= th.expensive).length
+
+    return {
+      startValue: dates[startIdx] ?? dates[0],
+      fromDate: dates[startIdx] ?? dates[0],
+      toDate: dates[dates.length - 1],
+      days: dates.length - startIdx,
+      cLast,
+      cRet,
+      cHigh,
+      cLow,
+      tsLast,
+      tsAvg,
+      coldPct: tss.length ? coldDays / tss.length : 0,
+      hotPct: tss.length ? hotDays / tss.length : 0,
+      coldDays,
+      hotDays,
+      vLast,
+      cheapPct: vs.length ? cheapDays / vs.length : 0,
+      expPct: vs.length ? expDays / vs.length : 0,
+    }
+  }, [data, firstUseful, range])
+
+  const option = useMemo<EChartsOption | null>(() => {
+    if (!data || data.dates.length === 0 || !sliceInfo) return null
+    const ink = cssVar('--ink-2')
+    const inkMain = cssVar('--ink')
+    const line = cssVar('--chart-grid') || cssVar('--line')
+    const accent = cssVar('--accent')
+    const cold = cssVar('--t-cold-bg')
+    const hot = cssVar('--t-hot-bg')
+    const th = data.thresholds
+    const dates = data.dates.slice(firstUseful)
+    const col = (k: keyof ScoreSeries['series']) => data.series[k].slice(firstUseful)
 
     const grids = [
-      { left: 64, right: 24, top: 28, height: '30%' },
-      { left: 64, right: 24, top: '44%', height: '24%' },
-      { left: 64, right: 24, top: '74%', height: '14%' },
+      { left: 58, right: 24, top: 32, height: '29%' },
+      { left: 58, right: 24, top: '43%', height: '24%' },
+      { left: 58, right: 24, top: '73%', height: '15%' },
     ]
     const axis = (i: number) => ({
-      type: 'category' as const, gridIndex: i, data: dates, boundaryGap: false,
+      type: 'category' as const,
+      gridIndex: i,
+      data: dates,
+      boundaryGap: false,
       axisLine: { lineStyle: { color: line } },
-      axisLabel: { color: ink, show: i === 2 },
+      axisLabel: { color: ink, fontSize: 11, show: i === 2 },
       axisTick: { show: i === 2 },
     })
     const yAxis = (i: number, opts: object) => ({
-      type: 'value' as const, gridIndex: i, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink }, ...opts,
+      type: 'value' as const,
+      gridIndex: i,
+      splitLine: { lineStyle: { color: line, type: 'dashed' } },
+      axisLabel: { color: ink, fontSize: 11 },
+      ...opts,
     })
     const band = (lo: number, hi: number) => ({
       silent: true,
@@ -72,75 +137,239 @@ export default function History() {
       ],
     })
 
-    const dimColors = [cssVar('--dim-1'), cssVar('--dim-2'), cssVar('--t-cold-1'), cssVar('--dim-4')]
     return {
       animation: false,
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
-      tooltip: { trigger: 'axis', axisPointer: { type: 'line' } },
-      legend: { top: 0, right: 24, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        axisPointer: { type: 'line', lineStyle: { color: cssVar('--line-strong'), type: 'dashed' } },
+      },
+      legend: { top: 0, right: 24, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
       grid: grids,
       xAxis: [axis(0), axis(1), axis(2)],
       yAxis: [
-        yAxis(0, { scale: true, name: '收盘', nameTextStyle: { color: ink } }),
-        yAxis(1, { min: 0, max: 100, interval: 20, name: '温度', nameTextStyle: { color: ink } }),
-        yAxis(2, { min: 0, max: 100, interval: 50, name: '估值', nameTextStyle: { color: ink } }),
+        yAxis(0, { scale: true, name: '沪深300', nameTextStyle: { color: ink, fontSize: 11 } }),
+        yAxis(1, { min: 0, max: 100, interval: 20, name: '温度 T_s', nameTextStyle: { color: ink, fontSize: 11 } }),
+        yAxis(2, { min: 0, max: 100, interval: 50, name: '估值 V', nameTextStyle: { color: ink, fontSize: 11 } }),
       ],
       dataZoom: [
-        { type: 'inside', xAxisIndex: [0, 1, 2], startValue },
-        { type: 'slider', xAxisIndex: [0, 1, 2], startValue, bottom: 8, height: 20, borderColor: line, textStyle: { color: ink } },
+        { type: 'inside', xAxisIndex: [0, 1, 2], startValue: sliceInfo.startValue },
+        {
+          type: 'slider',
+          xAxisIndex: [0, 1, 2],
+          startValue: sliceInfo.startValue,
+          bottom: 8,
+          height: 18,
+          borderColor: cssVar('--line'),
+          textStyle: { color: ink },
+        },
       ],
       series: [
         {
-          name: '沪深300', type: 'line', xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, data: col('close'),
-          lineStyle: { width: 1.2, color: ink }, itemStyle: { color: ink },
+          name: '沪深300',
+          type: 'line',
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          showSymbol: false,
+          data: col('close'),
+          lineStyle: { width: 1.6, color: inkMain },
+          itemStyle: { color: inkMain },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: theme === 'dark' ? 'rgba(241, 245, 249, 0.10)' : 'rgba(15, 23, 42, 0.08)' },
+                { offset: 1, color: 'rgba(241, 245, 249, 0.00)' },
+              ],
+            },
+          },
         },
         {
-          name: '择时温度 T_s', type: 'line', xAxisIndex: 1, yAxisIndex: 1, showSymbol: false, data: col('tS'),
-          lineStyle: { width: 1.5, color: accent }, itemStyle: { color: accent },
+          name: '择时温度 T_s',
+          type: 'line',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          showSymbol: false,
+          data: col('tS'),
+          lineStyle: { width: 2, color: accent },
+          itemStyle: { color: accent },
           markArea: band(th.extreme, 100 - th.extreme),
         },
-        ...(showDims
-          ? DIMS.map((d, i) => ({
-              name: d.label, type: 'line', xAxisIndex: 1, yAxisIndex: 1, showSymbol: false, data: col(d.key),
-              lineStyle: { width: 1, color: dimColors[i], opacity: 0.8 }, itemStyle: { color: dimColors[i] },
-            }))
-          : []),
+        ...DIMS.filter((d) => activeDims[d.key]).map((d) => ({
+          name: d.label,
+          type: 'line' as const,
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          showSymbol: false,
+          data: col(d.key),
+          lineStyle: { width: 1.2, color: cssVar(d.varName), opacity: 0.85 },
+          itemStyle: { color: cssVar(d.varName) },
+        })),
         {
-          name: '估值 V', type: 'line', xAxisIndex: 2, yAxisIndex: 2, showSymbol: false, data: col('v'),
-          lineStyle: { width: 1.5, color: cssVar('--t-hot-1') }, itemStyle: { color: cssVar('--t-hot-1') },
+          name: '估值 V',
+          type: 'line',
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+          showSymbol: false,
+          data: col('v'),
+          lineStyle: { width: 1.8, color: cssVar('--t-hot-1') },
+          itemStyle: { color: cssVar('--t-hot-1') },
           markArea: band(th.cheap, th.expensive),
         },
       ],
     }
-  }, [data, firstUseful, range, showDims])
+  }, [data, firstUseful, sliceInfo, activeDims, theme])
+
+  const toggleDim = (k: DimKey) => setActiveDims((prev) => ({ ...prev, [k]: !prev[k] }))
 
   if (error) return <div className="error" role="alert">{error}</div>
 
   return (
     <div className="page">
-      <div className="page-head">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1>历史</h1>
-          <p className="sub">
-            沪深300、择时温度 T_s 与估值 V 联动，拖动下方滑块或滚轮缩放。蓝底为冰点 / 便宜区，红底为过热 / 昂贵区。
+          <h1 className="m-0">历史走势</h1>
+          <p className="sub mt-1">
+            沪深300、择时温度 T_s 与估值 V 三图联动缩放。蓝区代表冰点 / 便宜，红区代表过热 / 昂贵。
           </p>
         </div>
-        <div className="actions">
-          <label className="check">
-            <input type="checkbox" checked={showDims} onChange={(e) => setShowDims(e.target.checked)} />
-            显示各维度
-          </label>
-          <div className="seg" role="group" aria-label="时间范围">
-            {RANGES.map((r) => (
-              <button key={r.key} className={r.key === range ? 'on' : ''} aria-pressed={r.key === range} onClick={() => setRange(r.key)}>
-                {r.label}
-              </button>
-            ))}
-          </div>
+        <div className="seg" role="group" aria-label="时间范围">
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              className={r.key === range ? 'on' : ''}
+              aria-pressed={r.key === range}
+              onClick={() => setRange(r.key)}
+            >
+              {r.label}
+            </button>
+          ))}
         </div>
       </div>
-      <section className="panel chart-panel">
-        {option ? <EChart option={option} height={620} /> : data && <div className="empty">还没有打分结果，先到"数据"页同步。</div>}
+
+      {/* 区间动态 KPI 概览条 */}
+      {sliceInfo && (
+        <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
+          <div className="panel p-4">
+            <div className="flex items-center justify-between text-xs text-[var(--ink-2)]">
+              <span>沪深300 区间表现</span>
+              <TrendingUp className="h-3.5 w-3.5 text-[var(--ink-3)]" />
+            </div>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <span className="text-2xl font-bold tracking-tight mono">
+                {sliceInfo.cLast?.toLocaleString('zh-CN', { maximumFractionDigits: 1 }) ?? '—'}
+              </span>
+              {sliceInfo.cRet !== null && (
+                <span className={`inline-flex items-center text-xs font-semibold mono ${sliceInfo.cRet >= 0 ? 'up' : 'down'}`}>
+                  {sliceInfo.cRet >= 0 ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+                  {pct(sliceInfo.cRet)}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+              区间 {sliceInfo.cLow?.toFixed(0)} ~ {sliceInfo.cHigh?.toFixed(0)}
+            </div>
+          </div>
+
+          <div className="panel p-4">
+            <div className="flex items-center justify-between text-xs text-[var(--ink-2)]">
+              <span>择时温度 T_s</span>
+              <Activity className="h-3.5 w-3.5 text-[var(--accent)]" />
+            </div>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <span className="text-2xl font-bold tracking-tight mono text-[var(--accent)]">
+                {sliceInfo.tsLast !== null ? sliceInfo.tsLast.toFixed(1) : '—'}
+              </span>
+              <span className="text-xs text-[var(--ink-2)] mono">
+                均值 {sliceInfo.tsAvg !== null ? sliceInfo.tsAvg.toFixed(1) : '—'}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center gap-3 text-[11.5px] mono">
+              <span className="inline-flex items-center gap-1 text-[var(--t-cold-2)]">
+                <Snowflake className="h-3 w-3" />
+                冰点 {(sliceInfo.coldPct * 100).toFixed(0)}% ({sliceInfo.coldDays}日)
+              </span>
+              <span className="inline-flex items-center gap-1 text-[var(--t-hot-2)]">
+                <Flame className="h-3 w-3" />
+                过热 {(sliceInfo.hotPct * 100).toFixed(0)}% ({sliceInfo.hotDays}日)
+              </span>
+            </div>
+          </div>
+
+          <div className="panel p-4">
+            <div className="flex items-center justify-between text-xs text-[var(--ink-2)]">
+              <span>估值背景 V</span>
+              <span className="text-[11px] text-[var(--ink-3)]">近 10 年分位</span>
+            </div>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <span className="text-2xl font-bold tracking-tight mono text-[var(--t-hot-1)]">
+                {sliceInfo.vLast !== null ? sliceInfo.vLast.toFixed(1) : '—'}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center gap-3 text-[11.5px] text-[var(--ink-2)] mono">
+              <span>便宜区 {(sliceInfo.cheapPct * 100).toFixed(0)}%</span>
+              <span>·</span>
+              <span>昂贵区 {(sliceInfo.expPct * 100).toFixed(0)}%</span>
+            </div>
+          </div>
+
+          <div className="panel p-4">
+            <div className="text-xs text-[var(--ink-2)]">统计窗口</div>
+            <div className="mt-1.5 text-lg font-semibold tracking-tight mono">
+              {sliceInfo.days.toLocaleString()} <span className="text-xs font-normal text-[var(--ink-2)]">个交易日</span>
+            </div>
+            <div className="mt-1 text-[11.5px] text-[var(--ink-3)] mono">
+              {sliceInfo.fromDate} ~ {sliceInfo.toDate}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 图表主卡 + 维度叠加胶囊 */}
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-[var(--ink-2)]">叠加子维度：</span>
+            {DIMS.map((d) => {
+              const on = activeDims[d.key]
+              return (
+                <button
+                  key={d.key}
+                  type="button"
+                  onClick={() => toggleDim(d.key)}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    on
+                      ? 'border-[var(--line-strong)] bg-[var(--panel-2)] text-[var(--ink)]'
+                      : 'border-[var(--line)] bg-transparent text-[var(--ink-3)] hover:text-[var(--ink-2)]'
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ background: `var(${d.varName})`, opacity: on ? 1 : 0.35 }}
+                  />
+                  {d.label}
+                </button>
+              )
+            })}
+          </div>
+          <span className="text-xs text-[var(--ink-3)]">滚轮缩放 · 拖拽底部滑块</span>
+        </div>
+
+        <div className="p-3">
+          {option ? (
+            <EChart option={option} height={600} />
+          ) : (
+            data && <div className="empty">还没有打分结果，先到「数据同步」页执行同步。</div>
+          )}
+        </div>
       </section>
     </div>
   )

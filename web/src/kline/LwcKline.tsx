@@ -6,6 +6,7 @@ import {
   type IChartApi, type MouseEventParams, type Time,
 } from 'lightweight-charts'
 import { cssVar } from '../EChart'
+import { useTheme } from '../theme'
 import { DOWN, UP, type KlineData, type KlineProps, type Num } from './kline'
 
 type Legend = { date: string; o?: number; h?: number; l?: number; c?: number; v?: number; lines: { name: string; color: string; v: Num }[] }
@@ -27,11 +28,12 @@ const fmtVol = (x: number | undefined, unit?: string) => (x === undefined ? '—
 export default function LwcKline({ data, height }: KlineProps) {
   const box = useRef<HTMLDivElement>(null)
   const [legend, setLegend] = useState<Legend | null>(null)
+  const { theme } = useTheme()
 
   useEffect(() => {
     const el = box.current
     if (!el || data.dates.length === 0) return
-    const ink = cssVar('--ink-2'), line = cssVar('--line')
+    const ink = cssVar('--ink-2'), line = cssVar('--chart-grid') || cssVar('--line')
     const chart: IChartApi = createChart(el, {
       autoSize: true,
       layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: ink, fontSize: 12,
@@ -87,7 +89,7 @@ export default function LwcKline({ data, height }: KlineProps) {
       chart.unsubscribeCrosshairMove(onMove)
       chart.remove()
     }
-  }, [data])
+  }, [data, theme])
 
   return (
     <div className="lwc-wrap" style={{ height }}>

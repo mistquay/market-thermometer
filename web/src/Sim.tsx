@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { api, ApiError, type PortfolioData, type SecurityHit, type SimAccount, type SimOrder, type SimParams, type SimPlan, type SimView } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct, TIER_TEXT } from './temperature'
+import { useTheme } from './theme'
 
 const STATUS: Record<string, [string, string]> = {
   pending: ['待成交', 'tag-warn'],
@@ -57,7 +59,10 @@ export default function Sim() {
           </p>
         </div>
         <div className="actions">
-          <button className="btn btn-primary" disabled={creating} onClick={() => setCreating(true)}>新建账户</button>
+          <button className="btn btn-primary" disabled={creating} onClick={() => setCreating(true)}>
+            <Plus className="h-4 w-4" />
+            新建账户
+          </button>
         </div>
       </div>
       {error && <div className="error" role="alert" onClick={() => setError('')}>{error}</div>}
@@ -133,6 +138,7 @@ function CreateForm({ defaults, onCancel, onCreated }: { defaults: SimParams; on
 
 function Account({ view, reload, onDelete, onError }: { view: SimView; reload: () => void; onDelete: () => void; onError: (s: string) => void }) {
   const { account: a, state: s } = view
+  const { theme } = useTheme()
   const ret = s.equity / a.cash - 1
   const curve = useMemo(() => s.curve ?? [], [s.curve])
   const bench = useMemo(() => view.bench ?? [], [view.bench])
@@ -141,46 +147,63 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
 
   const option = useMemo<EChartsOption | null>(() => {
     if (curve.length < 2) return null
-    const ink = cssVar('--ink-2'), line = cssVar('--line')
+    const ink = cssVar('--ink-2'), inkMain = cssVar('--ink'), line = cssVar('--chart-grid') || cssVar('--line')
     return {
       animation: false,
-      tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
-      legend: { top: 0, left: 0, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
-      grid: { left: 56, right: 24, top: 32, bottom: 48 },
-      xAxis: { type: 'category', data: curve.map((p) => p.date), boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 8, borderColor: line, textStyle: { color: ink } }],
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)),
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
+      grid: { left: 54, right: 24, top: 34, bottom: 50 },
+      xAxis: { type: 'category', data: curve.map((p) => p.date), boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisTick: { show: false }, axisLabel: { color: ink, fontSize: 11 } },
+      yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } },
+      dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } }],
       series: [
-        { name: '账户净值', type: 'line', data: curve.map((p) => p.equity / a.cash), showSymbol: false, lineStyle: { width: 1.8, color: cssVar('--accent') }, itemStyle: { color: cssVar('--accent') } },
-        { name: '沪深300', type: 'line', data: bench.map((b) => (bench[0] > 0 ? b / bench[0] : null)), showSymbol: false, lineStyle: { width: 1.1, color: ink }, itemStyle: { color: ink } },
+        { name: '账户净值', type: 'line', data: curve.map((p) => p.equity / a.cash), showSymbol: false, lineStyle: { width: 2, color: cssVar('--accent') }, itemStyle: { color: cssVar('--accent') } },
+        { name: '沪深300', type: 'line', data: bench.map((b) => (bench[0] > 0 ? b / bench[0] : null)), showSymbol: false, lineStyle: { width: 1.3, color: ink }, itemStyle: { color: ink } },
       ],
     }
-  }, [curve, bench, a.cash])
+  }, [curve, bench, a.cash, theme])
 
-  const tiles: [string, string, string][] = [
-    ['总资产', money(s.equity), `初始 ${money(a.cash)}`],
-    ['总收益', pct(ret, 2), benchRet === null ? '' : `同期沪深300 ${pct(benchRet, 2)}`],
-    ['现金', money(s.cash), `占 ${pct(s.cash / s.equity).replace('+', '')}`],
-    ['已实现盈亏', money(s.realized), `累计费用 ${money(s.fees)}`],
+  const tiles: { k: string; v: string; sub: string; cls?: string }[] = [
+    { k: '总资产', v: money(s.equity), sub: `初始 ${money(a.cash)}` },
+    { k: '总收益', v: pct(ret, 2), sub: benchRet === null ? '' : `同期沪深300 ${pct(benchRet, 2)}`, cls: dir(ret) },
+    { k: '可用现金', v: money(s.cash), sub: `占比 ${pct(s.cash / s.equity).replace('+', '')}` },
+    { k: '已实现盈亏', v: money(s.realized), sub: `累计费用 ${money(s.fees)}`, cls: dir(s.realized) },
   ]
   return (
     <>
       <section className="panel">
         <div className="panel-head">
           <strong>{a.name}</strong>
-          <span className="muted">
-            {a.start} 起 · 回放到 {s.asOf || '—'}（只撮合 {view.cutoff} 之前的日线）· 佣金万 {(a.params.commissionRate * 1e4).toFixed(1)}、最低 {a.params.minCommission} 元、
-            印花税万 {(a.params.stampDuty * 1e4).toFixed(1)}、滑点 {a.params.slippageBps} 基点
+          <span className="muted text-xs">
+            {a.start} 起 · 回放到 {s.asOf || '—'}（撮合 {view.cutoff} 前日线）· 佣金万 {(a.params.commissionRate * 1e4).toFixed(1)}、最低 {a.params.minCommission} 元、
+            印花税万 {(a.params.stampDuty * 1e4).toFixed(1)}、滑点 {a.params.slippageBps} bp
             {a.params.maxOrderAmount > 0 && `、单笔上限 ${money(a.params.maxOrderAmount)}`}
           </span>
           <span style={{ flex: 1 }} />
-          <button className="btn btn-ghost" onClick={reload}>刷新</button>
-          <button className="btn btn-ghost" onClick={onDelete}>删除</button>
+          <button className="btn btn-ghost" onClick={reload}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            刷新
+          </button>
+          <button className="btn btn-ghost text-[var(--bad)]" onClick={onDelete}>
+            <Trash2 className="h-3.5 w-3.5" />
+            删除
+          </button>
         </div>
       </section>
-      <div className="pf-tiles">
-        {tiles.map(([k, v, sub]) => (
-          <div key={k} className="panel pf-tile"><span className="muted small">{k}</span><strong className="mono">{v}</strong><span className="muted small">{sub}</span></div>
+      <div className="grid grid-cols-2 gap-3.5 xl:grid-cols-4">
+        {tiles.map((t) => (
+          <div key={t.k} className="panel p-4">
+            <div className="text-xs text-[var(--ink-2)]">{t.k}</div>
+            <div className={`mt-1 text-2xl font-bold tracking-tight mono ${t.cls ?? ''}`}>{t.v}</div>
+            <div className="mt-1 text-xs text-[var(--ink-3)]">{t.sub}</div>
+          </div>
         ))}
       </div>
       {option && (
@@ -220,14 +243,25 @@ function Account({ view, reload, onDelete, onError }: { view: SimView; reload: (
 function OrderForm({ accountId, onPlaced, onError }: { accountId: number; onPlaced: () => void; onError: (s: string) => void }) {
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SecurityHit[]>([])
+  const [open, setOpen] = useState(false)
   const [code, setCode] = useState('')
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [qty, setQty] = useState(100)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
-    if (!q.trim()) { setHits([]); return }
-    const t = setTimeout(() => api.searchSecurities(q).then((r) => setHits(r.items.filter((h) => h.kind !== 'ofund')), () => {}), 250)
+    const onClick = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  useEffect(() => {
+    if (!q.trim()) { setHits([]); setOpen(false); return }
+    const t = setTimeout(() => api.searchSecurities(q).then((r) => { setHits(r.items.filter((h) => h.kind !== 'ofund')); setOpen(true) }, () => {}), 220)
     return () => clearTimeout(t)
   }, [q])
   const submit = async () => {
@@ -244,17 +278,34 @@ function OrderForm({ accountId, onPlaced, onError }: { accountId: number; onPlac
   }
   return (
     <section className="panel">
-      <div className="panel-head"><strong>下单</strong><span className="muted">按最新收盘价做风控检查；在下一个交易日收盘成交</span></div>
+      <div className="panel-head"><strong>手工下单</strong><span className="muted">按最新收盘价做风控检查；在下一个交易日收盘成交</span></div>
       <div className="sim-order">
-        <div className="fund-search sim-search">
-          <input placeholder={code ? `已选 ${code}，可重新搜索` : '搜索股票或场内基金'} value={q} onChange={(e) => setQ(e.target.value)} />
-          {hits.length > 0 && (
-            <ul className="fund-hits">
+        <div ref={boxRef} className="relative min-w-60 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ink-3)]" />
+          <input
+            placeholder={code ? `已选 ${code}，可重新搜索` : '搜索股票或场内基金…'}
+            value={q}
+            onFocus={() => hits.length > 0 && setOpen(true)}
+            onChange={(e) => setQ(e.target.value)}
+            className="h-8.5 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] pr-8 pl-9 text-sm text-[var(--ink)] placeholder:text-[var(--ink-3)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)] focus:outline-none"
+          />
+          {q && (
+            <button type="button" onClick={() => { setQ(''); setHits([]); setOpen(false) }} className="absolute top-1/2 right-2.5 -translate-y-1/2 text-[var(--ink-3)] hover:text-[var(--ink)]">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {open && hits.length > 0 && (
+            <ul className="absolute top-full right-0 left-0 z-30 mt-1.5 max-h-64 list-none overflow-y-auto rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-1.5 shadow-[var(--shadow-md)]">
               {hits.map((h) => (
                 <li key={h.kind + h.code}>
-                  <span className="mono">{h.code}</span> {h.name || '（无名称）'}
-                  {!h.hasData && <span className="tag tag-warn">本地无数据</span>}
-                  <button className="btn btn-ghost" onClick={() => { setCode(h.code); setQ(''); setHits([]) }}>选择</button>
+                  <button
+                    type="button"
+                    onClick={() => { setCode(h.code); setQ(''); setHits([]); setOpen(false) }}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-[var(--ink)] hover:bg-[var(--panel-2)]"
+                  >
+                    <span><span className="mono font-semibold text-[var(--accent)]">{h.code}</span> {h.name || '（无名称）'}</span>
+                    {!h.hasData && <span className="tag tag-warn">本地无数据</span>}
+                  </button>
                 </li>
               ))}
             </ul>

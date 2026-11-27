@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError, type JobStatus, type PortfolioAnalysis, type PortfolioData, type PortfolioItem, type SecurityHit } from './api'
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
+import { useTheme } from './theme'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 
@@ -196,49 +197,63 @@ function Editor({ draft, setDraft, onSave, onCancel }: { draft: PortfolioData; s
 
 function Analysis({ a }: { a: PortfolioAnalysis }) {
   const r = a.result
+  const { theme } = useTheme()
   const labels = useMemo(() => Object.fromEntries(r.assets.map((x) => [x.key, x.label])), [r.assets])
   const navOption = useMemo<EChartsOption | null>(() => {
     if (r.dates.length === 0) return null
-    const ink = cssVar('--ink-2'), line = cssVar('--line'), accent = cssVar('--accent'), bad = cssVar('--bad')
+    const ink = cssVar('--ink-2'), inkMain = cssVar('--ink'), line = cssVar('--chart-grid') || cssVar('--line'), accent = cssVar('--accent'), bad = cssVar('--bad')
     return {
       animation: false,
-      tooltip: { trigger: 'axis', valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)) },
-      legend: { top: 0, left: 0, textStyle: { color: ink }, itemWidth: 14, itemHeight: 2 },
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        valueFormatter: (v: unknown) => (typeof v === 'number' ? v.toFixed(4) : String(v)),
+      },
+      legend: { top: 0, left: 0, textStyle: { color: ink, fontSize: 12 }, itemWidth: 14, itemHeight: 3 },
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
-      grid: [{ left: 56, right: 24, top: 32, height: '58%' }, { left: 56, right: 24, top: '74%', bottom: 48 }],
+      grid: [{ left: 54, right: 24, top: 34, height: '58%' }, { left: 54, right: 24, top: '74%', bottom: 48 }],
       xAxis: [
-        { type: 'category', data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { show: false } },
-        { type: 'category', gridIndex: 1, data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
+        { type: 'category', data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { show: false }, axisTick: { show: false } },
+        { type: 'category', gridIndex: 1, data: r.dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisTick: { show: false }, axisLabel: { color: ink, fontSize: 11 } },
       ],
       yAxis: [
-        { type: 'value', scale: true, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink } },
-        { type: 'value', gridIndex: 1, max: 0, splitLine: { lineStyle: { color: line } }, axisLabel: { color: ink, formatter: (v: number) => `${Math.round(v * 100)}%` } },
+        { type: 'value', scale: true, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11 } },
+        { type: 'value', gridIndex: 1, max: 0, splitLine: { lineStyle: { color: line, type: 'dashed' } }, axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${Math.round(v * 100)}%` } },
       ],
-      dataZoom: [{ type: 'inside', xAxisIndex: [0, 1] }, { type: 'slider', xAxisIndex: [0, 1], height: 16, bottom: 8, borderColor: line, textStyle: { color: ink } }],
+      dataZoom: [{ type: 'inside', xAxisIndex: [0, 1] }, { type: 'slider', xAxisIndex: [0, 1], height: 18, bottom: 8, borderColor: cssVar('--line'), textStyle: { color: ink } }],
       series: [
-        { name: '组合净值', type: 'line', data: r.nav, showSymbol: false, lineStyle: { width: 1.8, color: accent }, itemStyle: { color: accent } },
-        { name: '沪深300', type: 'line', data: r.benchNav, showSymbol: false, lineStyle: { width: 1.1, color: ink }, itemStyle: { color: ink } },
-        { name: '回撤', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: r.drawdown, showSymbol: false, lineStyle: { width: 1, color: bad }, itemStyle: { color: bad }, areaStyle: { color: bad, opacity: 0.15 } },
+        { name: '组合净值', type: 'line', data: r.nav, showSymbol: false, lineStyle: { width: 2, color: accent }, itemStyle: { color: accent } },
+        { name: '沪深300', type: 'line', data: r.benchNav, showSymbol: false, lineStyle: { width: 1.3, color: ink }, itemStyle: { color: ink } },
+        { name: '回撤', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: r.drawdown, showSymbol: false, lineStyle: { width: 1.2, color: bad }, itemStyle: { color: bad }, areaStyle: { color: bad, opacity: 0.16 } },
       ],
     }
-  }, [r])
+  }, [r, theme])
   const corrOption = useMemo<EChartsOption | null>(() => {
     if (r.corrKeys.length < 2) return null
-    const ink = cssVar('--ink-2')
+    const ink = cssVar('--ink-2'), inkMain = cssVar('--ink')
     const names = r.corrKeys.map((k) => labels[k] || k)
     const data: [number, number, number | null][] = []
     r.corr.forEach((row, i) => row.forEach((v, j) => data.push([j, i, v === null ? null : Math.round(v * 100) / 100])))
     return {
       animation: false,
-      tooltip: { formatter: (p: unknown) => { const d = (p as { data: [number, number, number] }).data; return `${names[d[1]]} × ${names[d[0]]}：${d[2]}` } },
+      tooltip: {
+        backgroundColor: cssVar('--tooltip-bg') || cssVar('--panel'),
+        borderColor: cssVar('--tooltip-border') || cssVar('--line-strong'),
+        borderWidth: 1,
+        textStyle: { color: inkMain, fontSize: 12 },
+        formatter: (p: unknown) => { const d = (p as { data: [number, number, number] }).data; return `${names[d[1]]} × ${names[d[0]]}：${d[2]}` },
+      },
       grid: { left: 120, right: 24, top: 8, bottom: 80 },
-      xAxis: { type: 'category', data: names, axisLabel: { color: ink, rotate: 30 } },
-      yAxis: { type: 'category', data: names, axisLabel: { color: ink } },
+      xAxis: { type: 'category', data: names, axisLabel: { color: ink, fontSize: 11, rotate: 30 } },
+      yAxis: { type: 'category', data: names, axisLabel: { color: ink, fontSize: 11 } },
       visualMap: { min: -1, max: 1, calculable: false, orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 120, textStyle: { color: ink },
         inRange: { color: [cssVar('--t-cold-2'), cssVar('--panel'), cssVar('--t-hot-2')] } },
-      series: [{ type: 'heatmap', data, label: { show: names.length <= 10, color: cssVar('--ink') } }],
+      series: [{ type: 'heatmap', data, label: { show: names.length <= 10, color: inkMain } }],
     }
-  }, [r, labels])
+  }, [r, labels, theme])
 
   if (r.note) return <div className="panel empty">{r.note}{r.missing.length > 0 && `（缺数据：${r.missing.join('、')}）`}</div>
   const s = r.stats, b = r.bench

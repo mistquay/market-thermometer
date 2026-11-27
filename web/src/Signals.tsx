@@ -3,6 +3,7 @@ import { api, type ScoreSeries, type SignalsResp } from './api'
 import EChart from './EChart'
 import { asMarkers, priceWithSignals } from './charts'
 import { EVENT_TEXT, fmt, PHASE_TEXT, TIER_TEXT } from './temperature'
+import { useTheme } from './theme'
 
 const FILTERS = [
   { key: 'signal', label: '买卖信号', types: ['BUY_DIP', 'SELL_PEAK'] },
@@ -21,6 +22,7 @@ export default function Signals() {
   const [prices, setPrices] = useState<ScoreSeries | null>(null)
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['key']>('signal')
   const [error, setError] = useState('')
+  const { theme } = useTheme()
 
   useEffect(() => {
     api.signals().then(setData, (e) => setError(e.message))
@@ -38,7 +40,7 @@ export default function Signals() {
     // 从温度有值的日子开始画，避开预热期
     const i0 = Math.max(0, prices.series.tS.findIndex((x) => x !== null))
     return priceWithSignals(prices.dates.slice(i0), prices.series.close.slice(i0), asMarkers(data.events))
-  }, [prices, data])
+  }, [prices, data, theme])
 
   if (error) return <div className="error" role="alert">{error}</div>
   if (!data) return null

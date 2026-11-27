@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { RefreshCw, ShieldCheck } from 'lucide-react'
 import { api, ApiError, type JobStatus, type QualityReport } from './api'
 
 const DIFF_TEXT: Record<string, string> = {
@@ -67,8 +68,12 @@ export default function Quality() {
           </p>
         </div>
         <div className="actions">
-          <button className="btn" disabled={loading} onClick={load}>{loading ? '计算中…' : '刷新'}</button>
+          <button className="btn" disabled={loading} onClick={load}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? '计算中…' : '刷新'}
+          </button>
           <button className="btn btn-primary" disabled={running} onClick={() => check()}>
+            <ShieldCheck className="h-3.5 w-3.5" />
             {running ? '核对中…' : '抽样交叉核对'}
           </button>
         </div>

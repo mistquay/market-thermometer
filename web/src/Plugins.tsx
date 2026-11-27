@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Play, RefreshCw, SlidersHorizontal } from 'lucide-react'
 import { api, ApiError, type PluginInfo } from './api'
 
 const KIND_ORDER = ['strategy', 'derived', 'metric_source', 'stock_source', 'fund_source', 'notifier', 'broker']
@@ -39,7 +40,12 @@ export default function Plugins() {
             外部插件的可执行文件只能在 config.yaml 中配置。
           </p>
         </div>
-        <div className="actions"><button className="btn" onClick={load}>刷新</button></div>
+        <div className="actions">
+          <button className="btn" onClick={load}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            刷新
+          </button>
+        </div>
       </div>
       {error && <div className="error" role="alert">{error}</div>}
 
@@ -88,8 +94,18 @@ function PluginCard({ p, test, onTest, onSaved }: { p: PluginInfo; test?: TestRe
         <span className="tag tag-muted">{p.builtin ? '内置' : `外部 ${p.version}`}</span>
         <span className={`tag ${p.enabled ? 'tag-ok' : 'tag-muted'}`}>{p.state}</span>
         <span style={{ flex: 1 }} />
-        {p.testable && <button className="btn btn-ghost" disabled={test?.busy} onClick={onTest}>{test?.busy ? '测试中…' : '测试调用'}</button>}
-        {p.editable && !editing && <button className="btn btn-ghost" onClick={startEdit}>设置</button>}
+        {p.testable && (
+          <button className="btn btn-ghost" disabled={test?.busy} onClick={onTest}>
+            <Play className="h-3.5 w-3.5" />
+            {test?.busy ? '测试中…' : '测试调用'}
+          </button>
+        )}
+        {p.editable && !editing && (
+          <button className="btn btn-ghost" onClick={startEdit}>
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            设置
+          </button>
+        )}
       </div>
       {p.description && <p className="muted small plugin-desc">{p.description}</p>}
       {test && !test.busy && (test.error ? <div className="bad-text small">{test.error}</div> : <div className="ok-text small">{test.text}</div>)}

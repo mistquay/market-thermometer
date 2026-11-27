@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Bell, Plus, Send, Trash2 } from 'lucide-react'
 import { api, ApiError, type NotifyChannel, type NotifyKind, type NotifyState } from './api'
 
 type Draft = { id: number; kind: string; name: string; config: Record<string, string>; masked: Record<string, string>; enabled: boolean }
@@ -77,29 +78,54 @@ export default function Settings() {
       </div>
       {error && <div className="error" role="alert">{error}</div>}
 
-      <section className="panel settings-section">
-        <div className="panel-head"><strong>推送开关</strong><span className="muted">两项默认关闭；“测试”发送不受开关限制</span></div>
-        <label className="field-check">
-          <input type="checkbox" checked={state.signals} onChange={(e) => toggle({ signals: e.target.checked })} />
-          实盘信号推送
-          <span className="muted">
-            {state.signals
-              ? `已开启：只推送 ${state.since || '开启时'} 之后交易日的武装、底部 / 顶部信号、估值档切换`
-              : '交易日收盘同步完成后，推送当日的武装、底部 / 顶部信号、估值档切换'}
-          </span>
-        </label>
-        <label className="field-check">
-          <input type="checkbox" checked={state.weekly} onChange={(e) => toggle({ weekly: e.target.checked })} />
-          周报
-          <span className="muted">每周五收盘同步完成后，推送本周温度走势、估值档、各维度得分（周五休市的那周不发）</span>
-        </label>
+      <section className="panel overflow-hidden">
+        <div className="panel-head border-b border-[var(--line)]">
+          <Bell className="h-4 w-4 text-[var(--accent)]" />
+          <strong>推送开关</strong>
+          <span className="muted">两项默认关闭；“测试”发送不受开关限制</span>
+        </div>
+        <div className="divide-y divide-[var(--line)]">
+          <label className="flex cursor-pointer items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-[var(--bg-subtle)]">
+            <div>
+              <div className="text-sm font-medium text-[var(--ink)]">实盘信号推送</div>
+              <div className="mt-0.5 text-xs text-[var(--ink-2)]">
+                {state.signals
+                  ? `已开启：只推送 ${state.since || '开启时'} 之后交易日的武装、底部 / 顶部信号、估值档切换`
+                  : '交易日收盘同步完成后，推送当日的武装、底部 / 顶部信号、估值档切换'}
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-[var(--accent)]"
+              checked={state.signals}
+              onChange={(e) => toggle({ signals: e.target.checked })}
+            />
+          </label>
+          <label className="flex cursor-pointer items-start justify-between gap-4 px-5 py-4 transition-colors hover:bg-[var(--bg-subtle)]">
+            <div>
+              <div className="text-sm font-medium text-[var(--ink)]">每周五周报</div>
+              <div className="mt-0.5 text-xs text-[var(--ink-2)]">
+                每周五收盘同步完成后，推送本周温度走势、估值档、各维度得分（周五休市的那周不发）
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-[var(--accent)]"
+              checked={state.weekly}
+              onChange={(e) => toggle({ weekly: e.target.checked })}
+            />
+          </label>
+        </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
+      <section className="panel overflow-hidden">
+        <div className="panel-head border-b border-[var(--line)]">
           <strong>推送渠道</strong>
           <span className="muted">钉钉、飞书、企业微信直连；Telegram 走 config.yaml 的 http_proxy</span>
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={startAdd} disabled={!!draft}>添加渠道</button>
+          <button className="btn btn-primary" style={{ marginLeft: 'auto' }} onClick={startAdd} disabled={!!draft}>
+            <Plus className="h-3.5 w-3.5" />
+            添加渠道
+          </button>
         </div>
         {state.channels.length === 0 ? (
           <div className="empty">还没有推送渠道。</div>
@@ -125,9 +151,15 @@ export default function Settings() {
                       {t && !t.busy && (t.ok ? <div className="ok-text small">测试发送成功</div> : <div className="bad-text small">{t.error}</div>)}
                     </td>
                     <td className="num nowrap">
-                      <button className="btn btn-ghost" disabled={t?.busy} onClick={() => test(c)}>{t?.busy ? '发送中…' : '测试'}</button>
+                      <button className="btn btn-ghost" disabled={t?.busy} onClick={() => test(c)}>
+                        <Send className="h-3.5 w-3.5" />
+                        {t?.busy ? '发送中…' : '测试'}
+                      </button>
                       <button className="btn btn-ghost" disabled={!!draft} onClick={() => startEdit(c)}>编辑</button>
-                      <button className="btn btn-ghost" onClick={() => remove(c)}>删除</button>
+                      <button className="btn btn-ghost text-[var(--bad)]" onClick={() => remove(c)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                        删除
+                      </button>
                     </td>
                   </tr>
                 )

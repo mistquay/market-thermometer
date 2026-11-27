@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Database, Download, RefreshCw } from 'lucide-react'
 import { api, ApiError, type JobStatus, type Metric, type Series } from './api'
 import LineChart from './LineChart'
 
@@ -150,11 +151,18 @@ export default function DataPage() {
             {metrics.length} 个指标，{healthy} 个数据正常。数据来自可插拔的数据源插件，按路由顺序取数，主源失败时自动回退。
           </p>
         </div>
-        <div className="actions">
-          <button className="btn" disabled={running} onClick={startBreadth}>回填市场广度</button>
-          <button className="btn" disabled={running} onClick={startExt}>回填 K 线与估值</button>
+        <div className="actions flex-wrap">
+          <button className="btn" disabled={running} onClick={startBreadth}>
+            <Database className="h-3.5 w-3.5" />
+            回填市场广度
+          </button>
+          <button className="btn" disabled={running} onClick={startExt}>
+            <Download className="h-3.5 w-3.5" />
+            回填 K 线与估值
+          </button>
           <button className="btn" disabled={running} onClick={() => startSync(true)}>全量回填</button>
           <button className="btn btn-primary" disabled={running} onClick={() => startSync(false)}>
+            <RefreshCw className={`h-3.5 w-3.5 ${running ? 'animate-spin' : ''}`} />
             {running ? '同步中…' : '增量同步'}
           </button>
         </div>
