@@ -136,3 +136,23 @@ ssh server 'sudo install -o mt -g mt -m 755 /tmp/mt.new /opt/mt/mt && sudo syste
 ```
 
 启动时会自动迁移表结构，并按生效参数重算得分。升级前建议先备份一次数据库（第 5 节）。
+
+## 8. Docker 与 GitHub Actions 多架构自动构建发布
+
+项目已内置分阶段 CI/CD 流水线（`.github/workflows/build-release.yml`）与零重复编译的多架构容器封装（`Dockerfile.runtime` + 完整多阶段 `Dockerfile` + `docker-compose.yml`）：
+
+1. **四阶段流水线**
+   - `Stage 1 · build-web`：Node 24 + pnpm 构建前端，上传 `internal/webui/dist` 产物。
+   - `Stage 2 · build-binaries`：下载前端产物并嵌入 Go，执行 `gofmt` / `go vet` / `go test`，交叉编译 `linux/amd64`、`linux/arm64`、`windows/amd64`、`darwin/arm64` 单文件二进制并生成 `SHA256SUMS.txt`。
+   - `Stage 3 · build-docker`：直接复用 Stage 2 产出的 `linux/amd64` 与 `linux/arm64` 二进制，通过 `Dockerfile.runtime` 快速封装推送 `linux/amd64,linux/arm64` 多架构镜像至 GHCR（`ghcr.io/<owner>/<repo>`）。
+   - `Stage 4 · release`：将 Stage 2 的独立二进制包与校验和发布到 GitHub Release。
+
+2. **版本触发规则**
+   - **默认推送 `master` / `main`**：仅打 `nightly` 滚动版本（Docker 标签 `:nightly`、`:sha-<commit>`；GitHub Release 滚动覆盖 `nightly` Pre-release）。
+   - **手动运行 Action（`workflow_dispatch`）**：
+     - `version` 留空：基于仓库最新正式 SemVer tag（`vX.Y.Z`）按 `bump`（`patch` / `minor` / `major`，无历史 tag 时默认 `v0.1.0`）自动递增，自动打 tag、发正式 Release 并推送 `:vX.Y.Z`、`:X.Y.Z`、`:X.Y`、`:latest` 镜像；
+     - `version` 填写指定版本号（如 `v1.2.0` 或 `1.2.0`）：校验格式与去重后直接按指定版本发布。
+
+3. **Docker 零配置运行**
+   - 容器内置 `MT_DB=/app/data/mt.db`、`MT_LISTEN=0.0.0.0:8080`、`TZ=Asia/Shanghai` 与 `/healthz` 健康检查，使用非 root 用户（UID/GID `1000`）运行。
+   - 首次启动无需 `config.yaml`，挂载 `./data:/app/data` 后打开 `http://<host>:8080` 即可初始化管理员口令并在 Web 设置页完成全部配置；完整 compose 示例见仓库根目录 `docker-compose.yml`。

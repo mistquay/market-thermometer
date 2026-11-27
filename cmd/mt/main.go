@@ -58,6 +58,12 @@ import (
 	"market-thermometer/internal/webui"
 )
 
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	if len(os.Args) < 2 {
@@ -91,6 +97,9 @@ func main() {
 		err = cmdConfig(os.Args[2:])
 	case "hashpw":
 		err = cmdHashPW()
+	case "version", "-v", "--version":
+		fmt.Printf("mt %s (commit %s, built %s)\n", version, commit, buildDate)
+		return
 	default:
 		usage()
 	}
@@ -100,7 +109,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|config|crypto|polymarket|pmbook|pmeval|gapfill|import-bars|ext-backfill|hashpw [-db data/mt.db] [-listen 127.0.0.1:8080]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|config|crypto|polymarket|pmbook|pmeval|gapfill|import-bars|ext-backfill|hashpw|version [-db data/mt.db] [-listen 127.0.0.1:8080]")
 	os.Exit(2)
 }
 
@@ -154,6 +163,9 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	}
 	if dbPath == "" {
 		dbPath = defaultDBPath()
+	}
+	if tickPath == "" {
+		tickPath = strings.TrimSpace(os.Getenv("MT_TICK_DB"))
 	}
 	if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
@@ -209,6 +221,8 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 	}
 	if *listenFlag != "" {
 		cfg.Listen = *listenFlag
+	} else if v := strings.TrimSpace(os.Getenv("MT_LISTEN")); v != "" {
+		cfg.Listen = v
 	}
 	if err := cfg.Normalize(); err != nil {
 		st.Close()
@@ -463,7 +477,7 @@ func cmdServe(args []string) error {
 			log.Printf("Polymarket 后台套利扫描已启用：每 90s（含全站高成交 NegRisk 发现）")
 		}
 	}
-	log.Printf("listening on http://%s  数据源: %v", a.cfg.Listen, a.hub.Sources())
+	log.Printf("mt %s (%s) listening on http://%s  数据源: %v", version, commit, a.cfg.Listen, a.hub.Sources())
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

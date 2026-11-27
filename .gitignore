@@ -8,6 +8,7 @@ data/
 /mt
 /mt.exe
 *.exe~
+/dist/
 internal/webui/dist/*
 !internal/webui/dist/.gitkeep
 

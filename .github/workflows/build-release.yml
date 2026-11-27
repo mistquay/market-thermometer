@@ -1,0 +1,454 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手动指定版本号（如 v1.0.0 或 1.0.0；留空则基于上一个正式 tag 自动递增）'
+        required: false
+        type: string
+        default: ''
+      bump:
+        description: '自动递增级别（仅在 version 留空时生效）'
+        required: false
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      prerelease:
+        description: '标记为 Pre-release（勾选时不会覆盖 Docker :latest 标签）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # 0. 计算版本与发布策略：
+  #    - 默认 push：仅打 nightly 版本（滚动 tag + :nightly 镜像）
+  #    - 手动触发：支持留空自动递增（基于最新 vX.Y.Z tag）或手动指定版本
+  # ─────────────────────────────────────────────────────────────────
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      short_version: ${{ steps.calc.outputs.short_version }}
+      minor_version: ${{ steps.calc.outputs.minor_version }}
+      is_nightly: ${{ steps.calc.outputs.is_nightly }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
+      commit: ${{ steps.calc.outputs.commit }}
+      build_date: ${{ steps.calc.outputs.build_date }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version & tags
+        id: calc
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          DATE_STAMP="$(date -u +'%Y%m%d')"
+
+          echo "commit=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" ]]; then
+            VER="nightly-${DATE_STAMP}-${SHORT_SHA}"
+            echo "version=${VER}" >> "$GITHUB_OUTPUT"
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "short_version=${VER}" >> "$GITHUB_OUTPUT"
+            echo "minor_version=" >> "$GITHUB_OUTPUT"
+            echo "is_nightly=true" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Resolved nightly build: ${VER}"
+            exit 0
+          fi
+
+          git fetch --tags --force
+
+          MANUAL="${INPUT_VERSION// /}"
+          if [[ -n "${MANUAL}" ]]; then
+            [[ "${MANUAL}" == v* ]] || MANUAL="v${MANUAL}"
+            if [[ ! "${MANUAL}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::非法版本号 '${INPUT_VERSION}'，请使用 SemVer 格式（例如 v1.2.3 或 1.2.3-rc.1）"
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/${MANUAL}" >/dev/null; then
+              echo "::error::Tag '${MANUAL}' 已存在，请指定新版本号或留空自动递增"
+              exit 1
+            fi
+            NEXT_TAG="${MANUAL}"
+          else
+            LATEST_TAG="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+            BUMP="${INPUT_BUMP:-patch}"
+            if [[ -z "${LATEST_TAG}" ]]; then
+              case "${BUMP}" in
+                major) NEXT_TAG="v1.0.0" ;;
+                minor) NEXT_TAG="v0.1.0" ;;
+                *)     NEXT_TAG="v0.1.0" ;;
+              esac
+            else
+              IFS='.' read -r MAJ MIN PAT <<< "${LATEST_TAG#v}"
+              case "${BUMP}" in
+                major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
+                minor) MIN=$((MIN + 1)); PAT=0 ;;
+                patch) PAT=$((PAT + 1)) ;;
+                *)     echo "::error::未知递增级别 ${BUMP}"; exit 1 ;;
+              esac
+              NEXT_TAG="v${MAJ}.${MIN}.${PAT}"
+            fi
+          fi
+
+          SHORT_VER="${NEXT_TAG#v}"
+          MINOR_VER="$(echo "${SHORT_VER}" | cut -d'.' -f1,2)"
+          IS_PRE="${INPUT_PRERELEASE}"
+          if [[ "${NEXT_TAG}" == *-* ]]; then
+            IS_PRE="true"
+          fi
+
+          echo "version=${NEXT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "tag=${NEXT_TAG}" >> "$GITHUB_OUTPUT"
+          echo "short_version=${SHORT_VER}" >> "$GITHUB_OUTPUT"
+          echo "minor_version=${MINOR_VER}" >> "$GITHUB_OUTPUT"
+          echo "is_nightly=false" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${IS_PRE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: ${NEXT_TAG} (prerelease=${IS_PRE})"
+
+  # ─────────────────────────────────────────────────────────────────
+  # 1. Stage 1：构建前端产物（internal/webui/dist）
+  # ─────────────────────────────────────────────────────────────────
+  build-web:
+    name: Stage 1 · Build Frontend
+    needs: [version]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Typecheck & build frontend
+        run: |
+          pnpm --dir web typecheck
+          pnpm --dir web build
+
+      - name: Upload webui dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: internal/webui/dist
+          include-hidden-files: true
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # 2. Stage 2：嵌入前端产物，测试并交叉编译多平台可运行二进制
+  # ─────────────────────────────────────────────────────────────────
+  build-binaries:
+    name: Stage 2 · Test & Build Go Binaries
+    needs: [version, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore frontend dist into internal/webui/dist
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: internal/webui/dist
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting, vet & unit tests
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+          go test ./...
+
+      - name: Cross-compile multi-arch binaries
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          BUILD_DATE: ${{ needs.version.outputs.build_date }}
+        run: |
+          set -euo pipefail
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
+          mkdir -p dist/linux/amd64 dist/linux/arm64 dist/release
+
+          # Linux amd64 & arm64（既用于 Docker 镜像封装，也作为独立二进制发 Release）
+          for ARCH in amd64 arm64; do
+            echo "==> Building linux/${ARCH}"
+            CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath -ldflags "${LDFLAGS}" -o "dist/linux/${ARCH}/mt" ./cmd/mt
+            tar -C "dist/linux/${ARCH}" -czf "dist/release/mt_${VERSION}_linux_${ARCH}.tar.gz" mt
+          done
+
+          # Windows amd64
+          echo "==> Building windows/amd64"
+          mkdir -p dist/windows/amd64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" -o dist/windows/amd64/mt.exe ./cmd/mt
+          (cd dist/windows/amd64 && zip -q "../../release/mt_${VERSION}_windows_amd64.zip" mt.exe)
+
+          # macOS arm64 (Apple Silicon)
+          echo "==> Building darwin/arm64"
+          mkdir -p dist/darwin/arm64
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "${LDFLAGS}" -o dist/darwin/arm64/mt ./cmd/mt
+          tar -C dist/darwin/arm64 -czf "dist/release/mt_${VERSION}_darwin_arm64.tar.gz" mt
+
+          # 生成校验和文件
+          (cd dist/release && sha256sum * > SHA256SUMS.txt)
+          ls -lh dist/release
+
+      - name: Upload Linux binaries for Docker packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-binaries
+          path: dist/linux
+          retention-days: 1
+
+      - name: Upload release archives & checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────────
+  # 3. Stage 3：复用预编译二进制，封装并推送 amd64 + arm64 Docker 镜像
+  # ─────────────────────────────────────────────────────────────────
+  build-docker:
+    name: Stage 3 · Package & Push Multi-Arch Docker Image
+    needs: [version, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download prebuilt Linux amd64/arm64 binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-binaries
+          path: dist/linux
+
+      - name: Ensure binaries are executable
+        run: chmod +x dist/linux/amd64/mt dist/linux/arm64/mt
+
+      - name: Setup QEMU (for arm64 apk runtime layer)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute Docker image tags
+        id: tags
+        shell: bash
+        env:
+          IMAGE_LOWER: ${{ env.REGISTRY }}/${{ github.repository }}
+          IS_NIGHTLY: ${{ needs.version.outputs.is_nightly }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TAG: ${{ needs.version.outputs.tag }}
+          SHORT_VER: ${{ needs.version.outputs.short_version }}
+          MINOR_VER: ${{ needs.version.outputs.minor_version }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+          IMG="$(echo "${IMAGE_LOWER}" | tr '[:upper:]' '[:lower:]')"
+          TAGS=()
+          if [[ "${IS_NIGHTLY}" == "true" ]]; then
+            TAGS+=("${IMG}:nightly")
+            TAGS+=("${IMG}:sha-${COMMIT}")
+          else
+            TAGS+=("${IMG}:${TAG}")
+            TAGS+=("${IMG}:${SHORT_VER}")
+            if [[ "${PRERELEASE}" != "true" ]]; then
+              TAGS+=("${IMG}:${MINOR_VER}")
+              TAGS+=("${IMG}:latest")
+            fi
+          fi
+          {
+            echo "image=${IMG}"
+            echo "list<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Target Docker tags:"
+          printf '  - %s\n' "${TAGS[@]}"
+
+      - name: Build and push multi-arch image (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.title=market-thermometer
+            org.opencontainers.image.description=A-share market thermometer, research & Polymarket paper trading terminal
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ needs.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────
+  # 4. Stage 4：发布独立二进制 GitHub Release（含校验和与镜像拉取命令）
+  # ─────────────────────────────────────────────────────────────────
+  release:
+    name: Stage 4 · Publish GitHub Release
+    needs: [version, build-binaries, build-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release
+
+      - name: Create/update tag & publish Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_NIGHTLY: ${{ needs.version.outputs.is_nightly }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          BUILD_DATE: ${{ needs.version.outputs.build_date }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          IMG="ghcr.io/$(echo "${REPO}" | tr '[:upper:]' '[:lower:]')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [[ "${IS_NIGHTLY}" == "true" ]]; then
+            # 滚动更新 nightly 标签并覆盖 nightly pre-release 资产
+            git tag -f nightly HEAD
+            git push origin refs/tags/nightly --force
+
+            NOTES_FILE="$(mktemp)"
+            printf '%s\n' \
+              "### Nightly 滚动构建（\`${VERSION}\`）" \
+              "" \
+              "- **提交**：\`${COMMIT}\`（构建于 \`${BUILD_DATE}\`）" \
+              "- **多架构 Docker 镜像**（\`linux/amd64\` + \`linux/arm64\`）：" \
+              '  ```bash' \
+              "  docker pull ${IMG}:nightly" \
+              "  docker pull ${IMG}:sha-${COMMIT}" \
+              '  ```' \
+              "- **独立二进制**：下方附件包含 Linux (amd64/arm64)、Windows (amd64)、macOS (arm64) 单文件产物及 \`SHA256SUMS.txt\`。" \
+              > "${NOTES_FILE}"
+
+            if gh release view nightly >/dev/null 2>&1; then
+              # 清理旧的 nightly 压缩包资产，避免堆积不同日期文件名的旧包
+              OLD_ASSETS="$(gh release view nightly --json assets --jq '.assets[].name')"
+              for A in ${OLD_ASSETS}; do
+                gh release delete-asset nightly "${A}" --yes || true
+              done
+              gh release edit nightly \
+                --title "Nightly (${VERSION})" \
+                --notes-file "${NOTES_FILE}" \
+                --prerelease
+              gh release upload nightly dist/release/* --clobber
+            else
+              gh release create nightly dist/release/* \
+                --title "Nightly (${VERSION})" \
+                --notes-file "${NOTES_FILE}" \
+                --prerelease
+            fi
+          else
+            # 正式版本：创建并推送 SemVer Tag，发布带自动变更日志的 Release
+            git tag -a "${TAG}" -m "Release ${TAG}"
+            git push origin "refs/tags/${TAG}"
+
+            NOTES_FILE="$(mktemp)"
+            {
+              printf '%s\n' \
+                "### 发布版本 \`${TAG}\`" \
+                "" \
+                "- **提交**：\`${COMMIT}\`（构建于 \`${BUILD_DATE}\`）" \
+                "- **多架构 Docker 镜像**（\`linux/amd64\` + \`linux/arm64\`）：" \
+                '  ```bash' \
+                "  docker pull ${IMG}:${TAG}"
+              if [[ "${PRERELEASE}" != "true" ]]; then
+                printf '%s\n' "  docker pull ${IMG}:latest"
+              fi
+              printf '%s\n' \
+                '  ```' \
+                "- **快速运行（零配置，首次打开网页设置管理员口令）**：" \
+                '  ```bash' \
+                "  docker run -d --name market-thermometer \\" \
+                "    -p 8080:8080 -v \$(pwd)/data:/app/data \\" \
+                "    ${IMG}:${TAG}" \
+                '  ```'
+            } > "${NOTES_FILE}"
+
+            EXTRA_ARGS=(--generate-notes)
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              EXTRA_ARGS+=(--prerelease)
+            else
+              EXTRA_ARGS+=(--latest)
+            fi
+
+            gh release create "${TAG}" dist/release/* \
+              --title "${TAG}" \
+              --notes-file "${NOTES_FILE}" \
+              "${EXTRA_ARGS[@]}"
+          fi

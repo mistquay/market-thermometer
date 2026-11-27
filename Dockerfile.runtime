@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1.7
+# 专用于 GitHub Actions 分阶段流水线：
+# 直接复用上游阶段已编译并测试通过的跨架构二进制（dist/linux/{amd64,arm64}/mt），
+# 零重复编译前端与 Go，快速封装 linux/amd64 与 linux/arm64 多架构镜像。
+
+FROM alpine:3.21
+ARG TARGETARCH
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -g 1000 -S mt \
+    && adduser -u 1000 -S -G mt -h /app mt \
+    && mkdir -p /app/data \
+    && chown -R mt:mt /app
+
+COPY --chmod=755 dist/linux/${TARGETARCH}/mt /usr/local/bin/mt
+
+WORKDIR /app
+USER mt
+
+ENV TZ=Asia/Shanghai \
+    MT_DB=/app/data/mt.db \
+    MT_LISTEN=0.0.0.0:8080
+
+EXPOSE 8080
+VOLUME ["/app/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["/usr/local/bin/mt"]
+CMD ["serve"]

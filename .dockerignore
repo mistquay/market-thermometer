@@ -1,0 +1,26 @@
+# Git 与 IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# 本地数据、数据库与密钥配置（严禁打入镜像）
+data/
+config.yaml
+*.db
+*.db-*
+
+# 本地构建产物与依赖缓存
+mt
+mt.exe
+mt-dev.exe
+*.exe~
+web/node_modules
+web/*.tsbuildinfo
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
+
+# 文档
+docs/
+*.md
