@@ -259,6 +259,7 @@ export default function Overview() {
         value: [+pct10.toFixed(1), dist, +erp.toFixed(2), x.pe ?? 0, x.pePct5Y ?? 0, (x.ret60d ?? 0) * 100],
         symbolSize: Math.max(14, Math.min(34, 12 + Math.max(0, erp) * 2.4)),
         itemStyle: { color, opacity: 0.86, borderColor: cssVar('--panel'), borderWidth: 2 },
+        label: { position: x.isTR ? ('bottom' as const) : ('top' as const) },
       }
     })
     const yVals = pts.map((p) => p.value[1])

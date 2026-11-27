@@ -207,7 +207,7 @@ export function EvalPanel({ seriesList }: { seriesList: string[] }) {
     const labels = raw.map((b) => (attrDim === 'series' ? b.key.replace('-up-or-down-', ' ').toUpperCase() : b.key))
     return {
       animation: false,
-      grid: { left: 56, right: 52, top: 36, bottom: 40 },
+      grid: { left: 56, right: 54, top: 52, bottom: 38 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
