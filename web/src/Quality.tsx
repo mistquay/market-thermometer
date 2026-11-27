@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, ShieldCheck } from 'lucide-react'
 import { api, ApiError, type JobStatus, type QualityReport } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const DIFF_TEXT: Record<string, string> = {
   close: '收盘价不一致',
@@ -16,6 +17,8 @@ export default function Quality() {
   const [loading, setLoading] = useState(false)
   const [showAllCov, setShowAllCov] = useState(false)
   const [gapQ, setGapQ] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(() => {
     setLoading(true)
@@ -46,16 +49,26 @@ export default function Quality() {
     })()
 
   const check = (codes: string[] = []) => start(() => api.startCrossCheck(codes))
-  const fill = (source: string, codes: string[]) => {
-    if (confirm(`用 ${source} 补齐 ${codes.length} 只股票在本地缺失的交易日？已有数据不会被覆盖，完成后重算市场广度。`)) start(() => api.startGapFill(source, codes))
+  const fill = async (source: string, codes: string[]) => {
+    const ok = await confirm({
+      title: '补齐缺失交易日',
+      message: `用 ${source} 补齐 ${codes.length} 只股票在本地缺失的交易日？已有数据不会被覆盖，完成后重算市场广度。`,
+      confirmText: '开始补齐',
+    })
+    if (ok) {
+      toast.info(`已启动 ${source} 补缺口任务（${codes.length} 只）`)
+      start(() => api.startGapFill(source, codes))
+    }
   }
   const missingCodes = (source: string) => [...new Set((cc?.diffs ?? []).filter((d) => d.src === source && d.kind === 'only_source').map((d) => d.code))]
 
-  const lowDays = rep?.coverage?.filter((c) => c.low) ?? []
+  const freshness = rep?.freshness ?? []
   const cov = rep?.coverage ?? []
+  const lowDays = cov.filter((c) => c.low)
   const covShown = showAllCov ? [...cov].reverse() : lowDays
   const cc = rep?.crossCheck
-  const gaps = (rep?.gaps ?? []).filter((g) => g.code.includes(gapQ.trim()))
+  const allGaps = rep?.gaps ?? []
+  const gaps = allGaps.filter((g) => g.code.includes(gapQ.trim()))
 
   return (
     <div className="page">
@@ -124,12 +137,13 @@ export default function Quality() {
             </section>
           )}
 
-          <section className="panel">
-            <div className="panel-head"><strong>新鲜度</strong><span className="muted">应有日期 = 最新交易日向前推发布时滞（两融等 T+1）</span></div>
+          <section className="panel overflow-hidden">
+            <div className="panel-head border-b border-[var(--line)]"><strong>新鲜度</strong><span className="muted">应有日期 = 最新交易日向前推发布时滞（两融等 T+1）</span></div>
+            <div className="table-scroll">
             <table className="table static">
               <thead><tr><th>数据</th><th>来源</th><th>最新日期</th><th>应有日期</th><th>状态</th></tr></thead>
               <tbody>
-                {rep.freshness.map((f) => (
+                {freshness.map((f) => (
                   <tr key={f.id}>
                     <td><div className="metric-name">{f.name}</div><code className="metric-id">{f.id}</code></td>
                     <td className="muted">{f.source || '—'}</td>
@@ -144,6 +158,7 @@ export default function Quality() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
 
           <section className="panel">
@@ -179,9 +194,9 @@ export default function Quality() {
               <input className="gap-filter" placeholder="筛选代码" value={gapQ} onChange={(e) => setGapQ(e.target.value)} />
             </div>
             {gaps.length === 0 ? (
-              <div className="empty">{rep.gaps.length === 0 ? '没有缺口。' : '没有匹配的股票。'}</div>
+              <div className="empty">{allGaps.length === 0 ? '没有缺口。' : '没有匹配的股票。'}</div>
             ) : (
-              <div className="scroll-y">
+              <div className="table-scroll scroll-y">
                 <table className="table static">
                   <thead><tr><th>代码</th><th className="num">缺失交易日</th><th>缺口区间</th><th></th></tr></thead>
                   <tbody>
@@ -190,8 +205,8 @@ export default function Quality() {
                         <td className="mono">{g.code}</td>
                         <td className="num mono">{g.missing}</td>
                         <td className="mono small">
-                          {g.runs.slice(0, 4).map((r) => (r.from === r.to ? r.from : `${r.from} ~ ${r.to}`) + `（${r.days}）`).join('，')}
-                          {g.runs.length > 4 && ` 等 ${g.runs.length} 段`}
+                          {(g.runs ?? []).slice(0, 4).map((r) => (r.from === r.to ? r.from : `${r.from} ~ ${r.to}`) + `（${r.days}）`).join('，')}
+                          {(g.runs ?? []).length > 4 && ` 等 ${g.runs.length} 段`}
                         </td>
                         <td className="num"><button className="btn btn-ghost" disabled={running} onClick={() => check([g.code])}>核对</button></td>
                       </tr>
@@ -213,12 +228,13 @@ export default function Quality() {
             </div>
             {cc && (
               <>
+                <div className="table-scroll">
                 <table className="table static">
                   <thead>
                     <tr><th>数据源</th><th className="num">股票</th><th className="num">日线</th><th className="num">收盘价不一致</th><th className="num">除权乘数不一致</th><th className="num">本地缺</th><th className="num">来源缺</th><th className="num">近期差异</th><th>说明</th></tr>
                   </thead>
                   <tbody>
-                    {cc.sources.map((s) => (
+                    {(cc.sources ?? []).map((s) => (
                       <tr key={s.source}>
                         <td>{s.source}</td>
                         <td className="num mono">{s.codes}</td>
@@ -240,6 +256,7 @@ export default function Quality() {
                     ))}
                   </tbody>
                 </table>
+                </div>
                 {cc.diffs && cc.diffs.length > 0 && (
                   <div className="scroll-y">
                     <table className="table static">

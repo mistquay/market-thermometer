@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Database, KeyRound, RotateCcw, Save, SlidersHorizontal } from 'lucide-react'
 import { api, ApiError, type AppConfig, type AppConfigResp } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const inputCls =
   'h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2.5 text-xs mono text-[var(--ink)] focus:border-[var(--accent)] focus:outline-none'
@@ -28,6 +29,8 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
   const [msg, setMsg] = useState('')
   const [warn, setWarn] = useState('')
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   // 密码修改
   const [oldPw, setOldPw] = useState('')
@@ -64,11 +67,12 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
       const next: AppConfig = { ...cfg, sources: { ...cfg.sources, routes: parsedRoutes } }
       const r = await api.saveAppConfig(next)
       setCfg(structuredClone(r.config))
-      setMsg(
+      const savedMsg =
         r.hotApplied && r.hotApplied.length > 0
           ? `配置已写入数据库；热更新已立即生效：${r.hotApplied.join(', ')}`
-          : '配置已写入数据库（app_config）。',
-      )
+          : '配置已写入数据库（app_config）。'
+      setMsg(savedMsg)
+      toast.success(savedMsg)
       if (r.restartRequired) {
         setWarn('包含端口/代理/数据源/WS 通道变更：已持久化到数据库，重启 mt serve 后生效（无需 config.yaml）。')
       }
@@ -82,7 +86,13 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
   }
 
   const reset = async () => {
-    if (!confirm('确认将数据库系统配置重置为内置零配置默认值？（保留管理员口令与历史数据）')) return
+    const ok = await confirm({
+      title: '恢复内置零配置默认值',
+      message: '确认将数据库系统配置重置为内置零配置默认值？（将保留管理员口令与历史数据）',
+      confirmText: '确认重置',
+      danger: true,
+    })
+    if (!ok) return
     setBusy(true)
     setError('')
     setMsg('')
@@ -90,6 +100,7 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
     try {
       await api.resetAppConfig()
       setMsg('已重置为内置零配置默认值。')
+      toast.success('已重置为内置零配置默认值')
       setWarn('部分启动级参数需重启 mt serve 后生效。')
       load()
       onSaved?.()
@@ -136,10 +147,12 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
       {/* 顶栏：来源与存储路径白盒展示 */}
       <section className="panel overflow-hidden">
         <div className="panel-head border-b border-[var(--line)]">
-          <Database className="h-4 w-4 text-[var(--accent)]" />
-          <strong>零配置数据库化配置中心（app_config）</strong>
-          <span className="tag tag-ok">{SOURCE_LABEL[resp.source] ?? resp.source}</span>
-          <div className="flex items-center gap-2" style={{ marginLeft: 'auto' }}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Database className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+            <strong>零配置数据库化配置中心（app_config）</strong>
+            <span className="tag tag-ok">{SOURCE_LABEL[resp.source] ?? resp.source}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
             <button className="btn btn-ghost" disabled={busy} onClick={reset}>
               <RotateCcw className="h-3.5 w-3.5" />
               恢复内置默认
@@ -166,9 +179,9 @@ export function ConfigPanel({ onSaved }: { onSaved?: () => void }) {
       {/* 1. Polymarket 盘口采集与公允概率策略 */}
       <section className="panel overflow-hidden">
         <div className="panel-head border-b border-[var(--line)]">
-          <SlidersHorizontal className="h-4 w-4 text-[var(--accent)]" />
+          <SlidersHorizontal className="h-4 w-4 shrink-0 text-[var(--accent)]" />
           <strong>Polymarket 盘口采集与影子策略参数</strong>
-          <span className="tag tag-cold">minEdge / Student-t df 支持保存后立即热更新</span>
+          <span className="tag tag-cold">minEdge / Student-t df 支持热更新</span>
         </div>
         <div className="grid grid-cols-1 gap-3.5 p-5 sm:grid-cols-2 lg:grid-cols-4">
           <label className="flex flex-col gap-1 text-xs text-[var(--ink-2)]">

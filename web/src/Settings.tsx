@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Bell, Clock, Database, FileCheck2, Plus, Send, Trash2 } from 'lucide-react'
 import { api, ApiError, type AuditEntry, type NotifyChannel, type NotifyKind, type NotifyState } from './api'
 import { ConfigPanel } from './ConfigPanel'
+import { useConfirm, useToast } from './ui/Feedback'
 
 type Draft = { id: number; kind: string; name: string; config: Record<string, string>; masked: Record<string, string>; enabled: boolean }
 type SettingsTab = 'config' | 'notify' | 'audit'
@@ -32,6 +33,8 @@ export default function Settings() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [tests, setTests] = useState<Record<number, { busy: boolean; error?: string; ok?: boolean }>>({})
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(() => {
     api.notify().then((s) => {
@@ -78,8 +81,15 @@ export default function Settings() {
     })
   const remove = (c: NotifyChannel) =>
     run(async () => {
-      if (!confirm(`删除推送渠道“${c.name}”？`)) return
+      const ok = await confirm({
+        title: '删除推送渠道',
+        message: `确认删除推送渠道「${c.name}」？`,
+        confirmText: '删除',
+        danger: true,
+      })
+      if (!ok) return
       await api.deleteChannel(c.id)
+      toast.success(`已删除推送渠道「${c.name}」`)
       load()
     })
   const test = async (c: NotifyChannel) => {
@@ -93,8 +103,16 @@ export default function Settings() {
   }
   const toggle = (body: { signals?: boolean; weekly?: boolean; opsAlerts?: boolean }) =>
     run(async () => {
-      if (body.signals && !confirm('开启后，每个交易日收盘后的强提醒事件（武装、底部 / 顶部信号、估值档切换）会推送到已启用的渠道。\n\n当前参数的回测尚未在样本外跑赢估值档基线，推送内容只是指标描述。确定开启？')) return
+      if (body.signals) {
+        const ok = await confirm({
+          title: '开启实盘信号推送',
+          message: '开启后，每个交易日收盘后的强提醒事件（武装、底部 / 顶部信号、估值档切换）会推送到已启用的渠道。\n\n推送内容只是客观指标描述，不构成投资建议。确定开启？',
+          confirmText: '确认开启',
+        })
+        if (!ok) return
+      }
       setState(await api.saveNotifySettings(body))
+      toast.success('推送开关已更新')
       loadAudits()
     })
   const saveSchedule = () =>

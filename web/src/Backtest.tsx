@@ -6,6 +6,7 @@ import { pct, TIER_TEXT } from './temperature'
 import { useTheme } from './theme'
 import BacktestSignals from './BacktestSignals'
 import Robustness from './Robustness'
+import { useConfirm, useToast } from './ui/Feedback'
 
 type Field = { path: string; label: string; step?: number; hint?: string; bool?: boolean }
 type Group = { title: string; defaultOpen?: boolean; fields: Field[] }
@@ -129,6 +130,8 @@ export default function Backtest() {
   const [notice, setNotice] = useState('')
   const [name, setName] = useState('')
   const { theme } = useTheme()
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const run = useCallback(
     async (p: FullParams | null) => {
@@ -553,8 +556,16 @@ export default function Backtest() {
                 <button
                   className="btn btn-primary h-8 px-2.5 text-xs"
                   disabled={!name.trim()}
-                  onClick={() => {
-                    if (confirm('设为生效后，总览、信号与后续推送都将按这组参数计算。确定？')) save(true)
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: '设为线上生效参数',
+                      message: '设为生效后，总览、信号与后续推送都将按这组参数重算并生效。确定继续？',
+                      confirmText: '确认生效',
+                    })
+                    if (ok) {
+                      await save(true)
+                      toast.success(`参数集「${name.trim()}」已设为生效`)
+                    }
                   }}
                 >
                   生效

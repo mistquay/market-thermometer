@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ExternalLink, NotebookPen, Plus, Search, Trash2 } from 'lucide-react'
 import { api, type ResearchNote } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 type Category = 'all' | 'security' | 'pm' | 'portfolio' | 'general'
 
@@ -27,6 +28,8 @@ export default function NotesPage() {
   const [tag, setTag] = useState('')
   const [editing, setEditing] = useState<{ id: number; target: string; title: string; content: string; tags: string } | null>(null)
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(() => {
     api.notes('', 300).then(setNotes, (e: Error) => setError(e.message))
@@ -81,15 +84,20 @@ export default function NotesPage() {
       .then(
         () => {
           setEditing(null)
+          toast.success('研究笔记已保存')
           load()
         },
         (e: Error) => setError(e.message),
       )
   }
 
-  const remove = (id: number) => {
-    if (!confirm('确认删除这条研究笔记？')) return
-    api.deleteNote(id).then(load, (e: Error) => setError(e.message))
+  const remove = async (id: number) => {
+    const ok = await confirm({ title: '删除研究笔记', message: '确认删除这条研究笔记？删除后不可恢复。', confirmText: '删除', danger: true })
+    if (!ok) return
+    api.deleteNote(id).then(() => {
+      toast.success('已删除笔记')
+      load()
+    }, (e: Error) => setError(e.message))
   }
 
   return (

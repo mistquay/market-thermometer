@@ -4,6 +4,7 @@ import { api, ApiError, type PortfolioData, type SecurityHit, type SimAccount, t
 import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct, TIER_TEXT } from './temperature'
 import { useTheme } from './theme'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const STATUS: Record<string, [string, string]> = {
   pending: ['待成交', 'tag-warn'],
@@ -28,6 +29,8 @@ export default function Sim() {
   const [view, setView] = useState<SimView | null>(null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const loadList = useCallback(() => api.simAccounts().then((r) => {
     setAccounts(r.accounts)
@@ -43,8 +46,16 @@ export default function Sim() {
   useEffect(loadView, [loadView])
 
   const remove = async () => {
-    if (!view || !confirm(`删除模拟账户“${view.account.name}”及其全部委托记录？`)) return
+    if (!view) return
+    const ok = await confirm({
+      title: '删除模拟账户',
+      message: `删除模拟账户「${view.account.name}」及其全部委托记录？不可恢复。`,
+      confirmText: '删除账户',
+      danger: true,
+    })
+    if (!ok) return
     await api.deleteSimAccount(view.account.id).catch((e) => setError(e.message))
+    toast.success(`已删除模拟账户「${view.account.name}」`)
     loadList()
   }
 

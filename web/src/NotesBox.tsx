@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { NotebookPen, Plus, Trash2 } from 'lucide-react'
 import { api, type ResearchNote } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 /** 可复用的研究笔记卡片，可绑定到个股、基金、组合或 Polymarket 事件。 */
 export function NotesBox({ target, label }: { target: string; label?: string }) {
   const [notes, setNotes] = useState<ResearchNote[]>([])
   const [editing, setEditing] = useState<{ id: number; title: string; content: string; tags: string } | null>(null)
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(() => {
     if (!target) return
@@ -23,15 +26,20 @@ export function NotesBox({ target, label }: { target: string; label?: string }) 
     api.saveNote({ id: editing.id, target, title: editing.title.trim(), content: editing.content, tags: editing.tags.trim() }).then(
       () => {
         setEditing(null)
+        toast.success('研究笔记已保存')
         load()
       },
       (e: Error) => setError(e.message),
     )
   }
 
-  const remove = (id: number) => {
-    if (!confirm('删除这条研究笔记？')) return
-    api.deleteNote(id).then(load, (e: Error) => setError(e.message))
+  const remove = async (id: number) => {
+    const ok = await confirm({ title: '删除研究笔记', message: '确认删除这条研究笔记？删除后不可恢复。', confirmText: '删除', danger: true })
+    if (!ok) return
+    api.deleteNote(id).then(() => {
+      toast.success('已删除笔记')
+      load()
+    }, (e: Error) => setError(e.message))
   }
 
   return (

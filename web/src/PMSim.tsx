@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeft, Plus, Radio, ShieldAlert, Trash2 } from 'lucide-react'
 import { api, type PMAccountView, type PMMarket, type PMOrder, type PMShadowStatus, type PMSignal, type PMSimParams } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const money = (x: number) => `${x < 0 ? '−' : ''}$${Math.abs(x).toFixed(2)}`
 const cents = (p: number) => `${(p * 100).toFixed(1)}¢`
@@ -27,6 +28,8 @@ export function SimPanel() {
   const [name, setName] = useState('')
   const [cash, setCash] = useState('1000')
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
   const load = useCallback(
     () =>
       api.pmSim().then(
@@ -54,9 +57,20 @@ export function SimPanel() {
       (e: Error) => setError(e.message),
     )
   }
-  const toggleHalt = () => {
-    if (!halt && !confirm('打开全局熔断：拒绝所有账户的一切新委托（模拟与以后的实盘）。确定？')) return
-    api.pmHalt(!halt).then((r) => setHalt(r.on), (e: Error) => setError(e.message))
+  const toggleHalt = async () => {
+    if (!halt) {
+      const ok = await confirm({
+        title: '开启全局熔断',
+        message: '打开全局熔断后，将拒绝所有账户的一切新委托（模拟与以后的实盘）。确定开启？',
+        confirmText: '确认熔断',
+        danger: true,
+      })
+      if (!ok) return
+    }
+    api.pmHalt(!halt).then((r) => {
+      setHalt(r.on)
+      toast[r.on ? 'warn' : 'success'](r.on ? '已开启全局熔断' : '已解除全局熔断')
+    }, (e: Error) => setError(e.message))
   }
 
   return (
@@ -151,6 +165,8 @@ export function AccountPage({ id }: { id: number }) {
   const [p, setP] = useState<PMSimParams | null>(null)
   const [error, setError] = useState('')
   const [msg, setMsg] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
   const load = useCallback(
     () =>
       api.pmSimAccount(id).then(
@@ -181,9 +197,16 @@ export function AccountPage({ id }: { id: number }) {
       },
       (e: Error) => setError(e.message),
     )
-  const del = () => {
-    if (!confirm(`删除账户「${v.account.name}」及其全部委托？不可恢复。`)) return
+  const del = async () => {
+    const ok = await confirm({
+      title: '删除模拟账户',
+      message: `删除账户「${v.account.name}」及其全部委托？此操作不可恢复。`,
+      confirmText: '删除账户',
+      danger: true,
+    })
+    if (!ok) return
     api.pmSimDelete(id).then(() => {
+      toast.success(`已删除账户「${v.account.name}」`)
       location.hash = '#/predict'
     }, (e: Error) => setError(e.message))
   }

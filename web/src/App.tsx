@@ -30,6 +30,7 @@ import { api, setUnauthorizedHandler } from './api'
 import { useTheme } from './theme'
 import CommandPalette from './CommandPalette'
 import Login from './Login'
+import { ErrorBoundary } from './ui/ErrorBoundary'
 
 const Overview = lazy(() => import('./Overview'))
 const History = lazy(() => import('./History'))
@@ -118,6 +119,7 @@ export default function App() {
     const onHash = () => {
       setPath(currentPath())
       setMobileOpen(false)
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior })
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -339,15 +341,17 @@ export default function App() {
         </header>
 
         <main className={`mx-auto w-full flex-1 px-4 py-5 lg:px-6 lg:py-6 ${page.wide ? 'max-w-[1680px]' : 'max-w-[1320px]'}`}>
-          <Suspense
-            fallback={
-              <div className="flex min-h-[260px] items-center justify-center">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--line-strong)] border-t-[var(--accent)]" />
-              </div>
-            }
-          >
-            {page.el()}
-          </Suspense>
+          <ErrorBoundary resetKey={path}>
+            <Suspense
+              fallback={
+                <div className="flex min-h-[260px] items-center justify-center">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--line-strong)] border-t-[var(--accent)]" />
+                </div>
+              }
+            >
+              {page.el()}
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 

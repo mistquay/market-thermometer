@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, Fish, Plus, RefreshCw, Scale, ShieldCheck, Trash2, X } from 'lucide-react'
 import { api, type PMAccountView, type PMArbResp, type PMExecConfig, type PMProposal, type PMTrade, type PMWhale } from './api'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const inputCls =
   'h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2.5 text-xs mono text-[var(--ink)] focus:border-[var(--accent)] focus:outline-none'
@@ -30,6 +31,8 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
   const [newLabel, setNewLabel] = useState('')
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const loadExec = useCallback(() => {
     api.pmExec().then(setExec, (e: Error) => setError(e.message))
@@ -91,17 +94,24 @@ export function ArbAndQueuePanel({ accounts }: { accounts: PMAccountView[] }) {
     })
   }
 
-  const saveExec = () => {
+  const saveExec = async () => {
     if (!exec) return
     setMsg('')
     setError('')
-    if (exec.mode === 'auto_sim' && !confirm('开启模拟盘自动下单？策略触发符合条件的信号时将直接调用模拟盘 Broker 吃单（受全局熔断与账户风控上限约束）。')) {
-      return
+    if (exec.mode === 'auto_sim') {
+      const ok = await confirm({
+        title: '开启模拟盘自动下单',
+        message: '策略触发符合条件的信号时将直接调用模拟盘 Broker 吃单（受全局熔断与账户风控上限约束）。确认开启？',
+        confirmText: '确认开启',
+        danger: true,
+      })
+      if (!ok) return
     }
     api.pmExecSave(exec).then(
       (saved) => {
         setExec(saved)
         setMsg('已保存执行模式')
+        toast.success('已保存策略执行模式')
       },
       (e: Error) => setError(e.message),
     )

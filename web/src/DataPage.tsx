@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Database, Download, RefreshCw } from 'lucide-react'
 import { api, ApiError, type JobStatus, type Metric, type Series } from './api'
 import LineChart from './LineChart'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const STALE_DAYS = 7
 
@@ -61,6 +62,8 @@ export default function DataPage() {
   const [job, setJob] = useState<JobStatus | null>(null)
   const [error, setError] = useState('')
   const [stocks, setStocks] = useState<Awaited<ReturnType<typeof api.stockStats>> | null>(null)
+  const confirm = useConfirm()
+  const toast = useToast()
   const loadStocks = useCallback(() => api.stockStats().then(setStocks, () => {}), [])
 
   const loadMetrics = useCallback(() => {
@@ -106,30 +109,50 @@ export default function DataPage() {
   }, [running, loadMetrics, loadStocks])
 
   async function startBreadth() {
-    if (!confirm('从本地 stockdb 逐只读取全部 A 股（含退市）日线，重新计算市场广度。需要 stockdb.exe 已启动，耗时可能较长（几十分钟），期间可以离开本页。确定开始？')) return
+    const ok = await confirm({
+      title: '回填市场广度',
+      message: '从本地数据源逐只读取全部 A 股（含退市）日线，重新计算市场广度。耗时可能较长（几十分钟），期间可离开本页。确定开始？',
+      confirmText: '开始回填',
+    })
+    if (!ok) return
     setError('')
     try {
       setJob(await api.startBreadth(true))
+      toast.info('已启动市场广度回填任务')
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     }
   }
 
   async function startExt() {
-    if (!confirm('从本地 stockdb 逐只读取 2015 年以来 A 股的开高低收、成交量、PE / PB、市值，供行情页 K 线与估值使用。需要 stockdb.exe 已启动；全部回填约 3 分钟，数据库约增加 1.2 GB；已回填的会跳过。确定开始？')) return
+    const ok = await confirm({
+      title: '回填 K 线与估值扩展字段',
+      message: '从本地 stockdb 逐只读取 2015 年以来 A 股的开高低收、成交量、PE / PB、市值。需要 stockdb.exe 已启动；约 3 分钟，已回填的会自动跳过。确定开始？',
+      confirmText: '开始回填',
+    })
+    if (!ok) return
     setError('')
     try {
       setJob(await api.startExtBackfill())
+      toast.info('已启动扩展字段回填任务')
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     }
   }
 
   async function startSync(full: boolean) {
-    if (full && !confirm('全量回填会从配置的起始日期重新拉取所有指标，确定继续？')) return
+    if (full) {
+      const ok = await confirm({
+        title: '全量回填指标',
+        message: '全量回填会从配置的起始日期重新拉取所有指标，确定继续？',
+        confirmText: '开始全量回填',
+      })
+      if (!ok) return
+    }
     setError('')
     try {
       setJob(await api.startSync(full))
+      toast.info(full ? '已启动全量回填任务' : '已启动增量同步任务')
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     }

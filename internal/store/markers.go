@@ -37,7 +37,7 @@ func (s *Store) PMSignalsBySlug(ctx context.Context, slug string) ([]PMSignal, e
 		s.p, s.ask, s.ask_size, s.fee_rate, s.edge, s.k, s.k_src, s.sd_bp, s.tau, s.spot, s.basis,
 		COALESCE(m.winner, -1)
 		FROM pm_signal s
-		LEFT JOIN pm_market m ON m.cond = s.cond
+		LEFT JOIN pm_market m ON m.condition_id = s.cond
 		WHERE s.slug=? ORDER BY s.t ASC LIMIT 200`, slug)
 	if err != nil {
 		return nil, err

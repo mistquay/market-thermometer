@@ -4,6 +4,7 @@ import EChart, { cssVar, type EChartsOption } from './EChart'
 import { pct } from './temperature'
 import { useTheme } from './theme'
 import { NotesBox } from './NotesBox'
+import { useConfirm, useToast } from './ui/Feedback'
 
 const KIND_TEXT: Record<string, string> = { stock: '股票', fund: '场内基金', ofund: '场外基金' }
 
@@ -23,6 +24,8 @@ export default function Portfolio() {
   const [dca, setDca] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(() => api.portfolios().then((l) => {
     setList(l)
@@ -54,8 +57,16 @@ export default function Portfolio() {
     }
   }
   const remove = async () => {
-    if (!current || !confirm(`删除组合“${current.name}”？`)) return
+    if (!current) return
+    const ok = await confirm({
+      title: '删除组合',
+      message: `确认删除组合「${current.name}」？`,
+      confirmText: '删除',
+      danger: true,
+    })
+    if (!ok) return
     await api.deletePortfolio(current.id).catch((e) => setError(e.message))
+    toast.success(`已删除组合「${current.name}」`)
     setAnalysis(null)
     load()
   }

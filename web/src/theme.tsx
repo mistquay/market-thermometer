@@ -39,8 +39,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme])
 
-  const setTheme = useCallback((t: Theme) => setThemeState(t), [])
-  const toggleTheme = useCallback(() => setThemeState((prev) => (prev === 'dark' ? 'light' : 'dark')), [])
+  const setTheme = useCallback((t: Theme) => {
+    document.documentElement.dataset.theme = t
+    document.documentElement.style.colorScheme = t
+    setThemeState(t)
+  }, [])
+  const toggleTheme = useCallback(() => {
+    setThemeState((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      document.documentElement.dataset.theme = next
+      document.documentElement.style.colorScheme = next
+      return next
+    })
+  }, [])
 
   return <Ctx.Provider value={{ theme, setTheme, toggleTheme }}>{children}</Ctx.Provider>
 }
