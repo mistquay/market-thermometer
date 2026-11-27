@@ -70,6 +70,14 @@ func DefaultParams() Params {
 	}
 }
 
+// CalibratedParams 返回经维度消融与样本外回测校准的推荐参数（方案 C 去掉二次分位 + 仅估值昂贵时发顶部卖出信号）。
+func CalibratedParams() Params {
+	p := DefaultParams()
+	p.SkipTPct = true
+	p.Signal.TopOnlyExpensive = true
+	return p
+}
+
 // Version 是参数的内容哈希，用作 score_daily.params_version。
 func (p Params) Version() string {
 	b, _ := json.Marshal(p)

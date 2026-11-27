@@ -122,5 +122,11 @@
     - 新增认证 SSE 实时事件流（`GET /api/stream`）取代前端手动刷新，在 Polymarket 页实时推送盘口/影子信号/待批提案/套利状态；
     - 图表买卖点叠加：Polymarket 事件页走势图叠加策略信号（▲）与模拟盘成交（◆）；A 股行情页新增模拟盘成交复盘列表；
     - 前端全路由 `React.lazy` + `<Suspense>` 代码拆分，首屏入口包从 ~1.08 MB 降至 250 kB（gzip 78.8 kB）。
+- **2026-11-27 第三轮迭代（零配置数据库化 + 全链路白盒可观测 + 校准参数激活）**：
+  - **零配置启动（彻底脱离 `config.yaml`）**：新增 `app_config` 表（`internal/store/appconfig.go`），全部配置与管理员 bcrypt 口令哈希持久化在 SQLite；`mt serve` 无需任何 `config.yaml` 即可零配置启动（内置完整默认值），并在首次访问 Web 时引导初始化管理员口令（`/api/auth/status` + `/api/auth/setup`）；若旧版 `config.yaml` 存在且库内尚无配置则自动一次性迁移入库；Web「系统设置 → 系统配置（数据库）」支持全量可视化编辑、默认值对照、口令修改与 `minEdge`/`df` 实时热更新，同时保持外部进程插件可执行命令只读（防任意命令执行）。
+  - **全链路白盒可观测（拒绝黑盒）**：
+    - A 股总览页新增「算法与生效参数白盒透视」面板，完整展示生效参数集名称/版本、开关状态（`SkipTPct`、`TopOnlyExpensive`）、当日 `ERP = 1/PE(T-1) − Y10(T-1)` → `V` → `T1..T4` → `T_base` → `T_s` 与分层目标仓位（底仓 ± 信号叠加）的逐项推导；
+    - Polymarket 影子策略监控页新增白盒公式与实时参数面板，逐市场展示 `z` 分数、合成标准差 `σ_τ(bp)`、**正态基准 P → Student-t 厚尾 P** 对比、每股手续费与净 Edge。
+  - **校准参数落地激活**：本地库已激活 A 股「方案C+昂贵卖顶（已校准）」（重算 5,318 交易日），并已在数据库配置启用 Polymarket `book.ws = true` 与 `strategy.df = 6`。
 
 接续工作见 `docs/handoff.md`。

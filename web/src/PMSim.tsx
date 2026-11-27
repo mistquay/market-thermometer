@@ -573,9 +573,10 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <Radio className="h-4 w-4 text-[var(--accent)]" />
-          <strong className="text-sm font-semibold">公允概率策略 · 影子模式</strong>
+          <strong className="text-sm font-semibold">公允概率策略 · 影子模式（白盒实时推导）</strong>
           <span className="tag tag-cold mono">{s.strategy}</span>
-          <span className="tag tag-muted">阈值 ≥ {(s.minEdge * 100).toFixed(0)}¢</span>
+          <span className="tag tag-ok">{s.distribution || (s.df && s.df > 2 ? `Student-t(df=${s.df})` : '标准正态 Φ(z)')}</span>
+          <span className="tag tag-muted">阈值 ≥ {(s.minEdge * 100).toFixed(1)}¢</span>
           <span className="tag tag-muted mono">本次记录 {s.signals} 条</span>
           {s.ptbLag > 0 && <span className="tag tag-muted mono">起始价延迟 {s.ptbLag.toFixed(0)}s</span>}
           {s.lastErr && <span className="tag tag-bad">{s.lastErr}</span>}
@@ -583,9 +584,50 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
         <span className="mono text-xs text-[var(--ink-2)]">
           基差{' '}
           {Object.entries(s.basis)
-            .map(([a, b]) => `${a} ${(b * 1e4).toFixed(1)}±${(s.basisErr[a] ?? 0).toFixed(1)}bp (${s.basisN[a]})`)
+            .map(([a, b]) => `${a} ${(b * 1e4).toFixed(1)}±${(s.basisErr[a] ?? 0).toFixed(1)}bp (N=${s.basisN[a]})`)
             .join(' · ') || '未校准'}
         </span>
+      </div>
+
+      {/* 白盒模型公式与实时参数说明 */}
+      <div className="grid grid-cols-1 gap-3 border-b border-[var(--line)] bg-[var(--bg-subtle)] px-5 py-3 text-xs text-[var(--ink-2)] lg:grid-cols-3">
+        <div>
+          <div className="font-semibold text-[var(--ink)]">① 概率推导公式（无黑盒）</div>
+          <div className="mt-1 mono text-[11px] leading-relaxed">
+            z = (ln E[TWAP<sub>60s</sub>] − ln K) / √(σ²·τ<sub>eff</sub> + ε<sub>K</sub>² + ε<sub>end</sub>²)
+            <br />
+            {s.df && s.df > 2
+              ? `P(Up) = StudentT(z · √(${s.df}/${(s.df - 2).toFixed(0)}), df=${s.df})（厚尾降权极端过自信）`
+              : 'P(Up) = Φ(z)（标准正态分布，可在「系统设置」调大 df 启用厚尾）'}
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-[var(--ink)]">② 波动率与手续费口径</div>
+          <div className="mt-1 text-[11px] leading-relaxed">
+            <div>波动率：{s.volMode || 'BlendedSigma (30m + 5m 混合实现波动率)'}</div>
+            <div className="mono">
+              实时 σ：
+              {Object.entries(s.sigma ?? {})
+                .map(([sym, v]) => `${sym} ${(v * 1e4).toFixed(2)}bp/√s`)
+                .join(' · ') || '等待采集'}
+            </div>
+            <div>净预期 Edge = P − 卖一 − feeRate × p(1−p)</div>
+          </div>
+        </div>
+        <div>
+          <div className="font-semibold text-[var(--ink)]">③ 参数来源与热更新</div>
+          <div className="mt-1 text-[11px] leading-relaxed">
+            <div>
+              当前参数均持久化在数据库 <span className="mono">app_config</span>：
+              <span className="mono text-[var(--ink)]"> minEdge={(s.minEdge * 100).toFixed(1)}¢, df={s.df ?? 0}</span>
+            </div>
+            <div>
+              <a href="#/settings" className="link">
+                前往「系统设置 → 配置中心」修改（保存即热更新） →
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="table-scroll">
@@ -594,13 +636,14 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
             <tr>
               <th>市场</th>
               <th className="num">剩余</th>
-              <th className="num">起始价</th>
-              <th className="num">现价</th>
-              <th className="num">P(Up)</th>
+              <th className="num">起始价 K</th>
+              <th className="num">现价 S</th>
+              <th className="num">z / 合成σ(bp)</th>
+              <th className="num">P(Up) (正态→当前)</th>
               <th className="num">Up 买一 / 卖一</th>
               <th className="num">Down 卖一</th>
-              <th className="num">买 Up 预期</th>
-              <th className="num">买 Down 预期</th>
+              <th className="num">买 Up 净Edge (费)</th>
+              <th className="num">买 Down 净Edge (费)</th>
             </tr>
           </thead>
           <tbody>
@@ -616,22 +659,41 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
                     <td className="num mono">{e.tau}s</td>
                     <td
                       className="num mono"
-                      title={e.kSrc === 'exact' ? '同一时刻已结算的起始价（精确）' : '开始前 60 秒币安均价按基差换算（估计）'}
+                      title={e.kSrc === 'exact' ? '同一时刻已结算的起始价（精确）' : `开始前 60 秒币安均价按基差换算（估计，ε_K=${(e.kErrBp ?? 0).toFixed(1)}bp）`}
                     >
                       {e.k.toFixed(2)}
                       {e.kSrc === 'exact' ? '' : '*'}
                     </td>
                     <td className="num mono">{e.spot.toFixed(2)}</td>
-                    <td className="num mono font-semibold text-[var(--accent)]">{(e.p * 100).toFixed(1)}%</td>
+                    <td className="num mono small" title={`z=${(e.z ?? 0).toFixed(3)}, 合成标准差=${e.sdBp.toFixed(1)}bp, 结束基差误差=${(e.endErrBp ?? 0).toFixed(1)}bp`}>
+                      {(e.z ?? 0) >= 0 ? '+' : ''}
+                      {(e.z ?? 0).toFixed(2)} / {e.sdBp.toFixed(1)}
+                    </td>
+                    <td className="num mono">
+                      {e.df && e.df > 2 && e.normalP !== undefined ? (
+                        <span title={`正态 ${(e.normalP * 100).toFixed(1)}% → Student-t(df=${e.df}) ${(e.p * 100).toFixed(1)}%`}>
+                          <span className="text-[11px] text-[var(--ink-3)]">{(e.normalP * 100).toFixed(1)}%→</span>
+                          <strong className="text-[var(--accent)]">{(e.p * 100).toFixed(1)}%</strong>
+                        </span>
+                      ) : (
+                        <strong className="text-[var(--accent)]">{(e.p * 100).toFixed(1)}%</strong>
+                      )}
+                    </td>
                     <td className="num mono">
                       {cents(e.bidUp)} / {cents(e.askUp)}
                     </td>
                     <td className="num mono">{cents(e.askDn)}</td>
-                    <td className="num mono">{edge(e.edgeUp)}</td>
-                    <td className="num mono">{edge(e.edgeDn)}</td>
+                    <td className="num mono">
+                      {edge(e.edgeUp)}
+                      {e.feeUp ? <span className="ml-1 text-[10px] text-[var(--ink-3)]">({(e.feeUp * 100).toFixed(1)}¢)</span> : null}
+                    </td>
+                    <td className="num mono">
+                      {edge(e.edgeDn)}
+                      {e.feeDn ? <span className="ml-1 text-[10px] text-[var(--ink-3)]">({(e.feeDn * 100).toFixed(1)}¢)</span> : null}
+                    </td>
                   </>
                 ) : (
-                  <td colSpan={8} className="muted">
+                  <td colSpan={9} className="muted">
                     {e.reason}
                   </td>
                 )}
@@ -639,7 +701,7 @@ export function ShadowPanel({ s }: { s: PMShadowStatus }) {
             ))}
             {evals.length === 0 && (
               <tr>
-                <td colSpan={9} className="muted">
+                <td colSpan={10} className="muted">
                   没有进行中的市场。
                 </td>
               </tr>

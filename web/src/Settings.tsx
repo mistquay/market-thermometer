@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Bell, Clock, FileCheck2, Plus, Send, Trash2 } from 'lucide-react'
+import { Bell, Clock, Database, FileCheck2, Plus, Send, Trash2 } from 'lucide-react'
 import { api, ApiError, type AuditEntry, type NotifyChannel, type NotifyKind, type NotifyState } from './api'
+import { ConfigPanel } from './ConfigPanel'
 
 type Draft = { id: number; kind: string; name: string; config: Record<string, string>; masked: Record<string, string>; enabled: boolean }
+type SettingsTab = 'config' | 'notify' | 'audit'
 
 const ACTION_LABEL: Record<string, string> = {
   'pm.halt': 'PM 全局熔断',
@@ -13,9 +15,14 @@ const ACTION_LABEL: Record<string, string> = {
   'notify.settings': '推送与调度设置',
   'notify.channel': '推送渠道变更',
   'plugin.config': '插件配置',
+  'config.save': '系统配置保存',
+  'config.reset': '系统配置重置',
+  'auth.setup': '初始化管理员口令',
+  'auth.password': '修改管理员口令',
 }
 
 export default function Settings() {
+  const [tab, setTab] = useState<SettingsTab>('config')
   const [state, setState] = useState<NotifyState | null>(null)
   const [audits, setAudits] = useState<AuditEntry[]>([])
   const [auditFilter, setAuditFilter] = useState('')
@@ -104,12 +111,32 @@ export default function Settings() {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>设置</h1>
-          <p className="sub">推送渠道与推送开关。Webhook、密钥等敏感信息保存后只显示末 4 位。</p>
+          <h1>系统设置</h1>
+          <p className="sub">全部系统参数已迁移至本地 SQLite 数据库（零 config.yaml 启动），并支持推送渠道、调度窗口与审计日志管理。</p>
         </div>
       </div>
       {error && <div className="error" role="alert">{error}</div>}
 
+      <div className="tabs-bar" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === 'config'} className={`tab-btn ${tab === 'config' ? 'on' : ''}`} onClick={() => setTab('config')}>
+          <Database className="h-4 w-4" />
+          系统配置（数据库）
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'notify'} className={`tab-btn ${tab === 'notify' ? 'on' : ''}`} onClick={() => setTab('notify')}>
+          <Bell className="h-4 w-4" />
+          推送与调度
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'audit'} className={`tab-btn ${tab === 'audit' ? 'on' : ''}`} onClick={() => setTab('audit')}>
+          <FileCheck2 className="h-4 w-4" />
+          审计日志
+          {audits.length > 0 && <span className="tag tag-muted">{audits.length}</span>}
+        </button>
+      </div>
+
+      {tab === 'config' && <ConfigPanel onSaved={loadAudits} />}
+
+      {tab === 'notify' && (
+      <>
       <section className="panel overflow-hidden">
         <div className="panel-head border-b border-[var(--line)]">
           <Bell className="h-4 w-4 text-[var(--accent)]" />
@@ -283,11 +310,15 @@ export default function Settings() {
           </table>
         )}
       </section>
+      </>
+      )}
+
+      {tab === 'audit' && (
       <section className="panel">
         <div className="panel-head">
           <FileCheck2 className="h-4 w-4 text-[var(--accent)]" />
           <strong>审计日志</strong>
-          <span className="muted">只追加不删改，记录参数生效、熔断、委托、推送与插件配置变更</span>
+          <span className="muted">只追加不删改，记录配置变更、参数生效、熔断、委托与推送操作</span>
           <select
             style={{ marginLeft: 'auto' }}
             className="h-8 rounded-lg border border-[var(--line-strong)] bg-[var(--bg-subtle)] px-2 text-xs text-[var(--ink)]"
@@ -295,6 +326,8 @@ export default function Settings() {
             onChange={(e) => setAuditFilter(e.target.value)}
           >
             <option value="">全部操作</option>
+            <option value="config">系统配置（config.*）</option>
+            <option value="auth">口令与鉴权（auth.*）</option>
             <option value="pm">Polymarket（pm.*）</option>
             <option value="params">温度计参数</option>
             <option value="sim">A 股模拟盘</option>
@@ -322,6 +355,7 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
     </div>
   )
 }

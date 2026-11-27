@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 
+	"market-thermometer/internal/datasource"
 	"market-thermometer/internal/engine"
 	"market-thermometer/internal/market"
 )
@@ -46,12 +47,45 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"market": market.CN.Name, "index": market.CN.Index, "paramsVersion": p.Version(), "params": p,
 	}
+	if sets, err := s.store.ListParams(r.Context()); err == nil {
+		for _, ps := range sets {
+			if ps.Active {
+				out["paramsName"] = ps.Name
+				break
+			}
+		}
+	}
+	raw := map[string]any{}
+	if pt, ok, err := s.store.LatestPoint(r.Context(), datasource.CNHS300PE); err == nil && ok {
+		raw["pe"], raw["peDate"] = jf(pt.Value), pt.Date
+	}
+	if pt, ok, err := s.store.LatestPoint(r.Context(), datasource.CNBondY10); err == nil && ok {
+		raw["bondY10"], raw["bondDate"] = jf(pt.Value), pt.Date
+	}
+	out["raw"] = raw
 	if _, phase, err := s.store.LatestPhase(r.Context(), market.CN.ID, p.Version()); err == nil {
 		out["phase"] = phase
 	}
 	if evs, err := s.store.Events(r.Context(), market.CN.ID, p.Version()); err == nil {
-		// 最近的择时事件（不含估值档切换和降级记录）
+		// 最近的择时事件（不含估值档切换和降级记录），同时计算分层持仓的当前信号叠加项
 		var recent []json.RawMessage
+		overlay := 0.0
+		lastSig := ""
+		for _, rawEv := range evs {
+			var e struct {
+				Date    string
+				Type    string
+				Observe bool
+			}
+			if json.Unmarshal(rawEv, &e) == nil {
+				switch {
+				case e.Type == engine.EvBuyDip && !e.Observe:
+					overlay, lastSig = p.Position.Step, e.Date+" 底部信号"
+				case e.Type == engine.EvSellPeak:
+					overlay, lastSig = -p.Position.Step, e.Date+" 顶部信号"
+				}
+			}
+		}
 		for i := len(evs) - 1; i >= 0 && len(recent) < 5; i-- {
 			var e struct{ Type string }
 			if json.Unmarshal(evs[i], &e) == nil && e.Type != engine.EvTierChange && e.Type != engine.EvDegraded {
@@ -59,6 +93,13 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out["recentEvents"] = recent
+		if n := len(days); n > 0 {
+			base := p.Position.Base(days[n-1].Tier)
+			weight := math.Max(0, math.Min(1, base+overlay))
+			out["position"] = map[string]any{
+				"tier": days[n-1].Tier, "base": jf(base), "overlay": jf(overlay), "weight": jf(weight), "lastSignal": lastSig,
+			}
+		}
 	}
 	if n := len(days); n > 0 {
 		out["last"] = dayJSON(days[n-1])

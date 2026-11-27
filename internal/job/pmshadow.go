@@ -79,23 +79,42 @@ type kInfo struct {
 	at    time.Time
 }
 
-// PMEval 是一个市场最近一次估值（供页面展示）。
+// PMEval 是一个市场最近一次估值（供页面展示与白盒透视）。
 type PMEval struct {
-	Target PMBookTarget `json:"target"`
-	OK     bool         `json:"ok"`
-	Reason string       `json:"reason,omitempty"`
-	P      float64      `json:"p"` // P(Up)
-	BidUp  float64      `json:"bidUp"`
-	AskUp  float64      `json:"askUp"`
-	AskDn  float64      `json:"askDn"`
-	EdgeUp float64      `json:"edgeUp"`
-	EdgeDn float64      `json:"edgeDn"`
-	K      float64      `json:"k"`
-	KSrc   string       `json:"kSrc"`
-	Spot   float64      `json:"spot"` // 当前价（Chainlink 口径）
-	SdBp   float64      `json:"sdBp"`
-	Tau    int64        `json:"tau"`
-	At     time.Time    `json:"at"`
+	Target   PMBookTarget `json:"target"`
+	OK       bool         `json:"ok"`
+	Reason   string       `json:"reason,omitempty"`
+	P        float64      `json:"p"`                 // 模型 P(Up)（按当前分布：Student-t 或正态）
+	NormalP  float64      `json:"normalP,omitempty"` // 同 z 下的正态基准 P(Up)，便于白盒对比肥尾影响
+	Z        float64      `json:"z,omitempty"`       // 标准化得分 (ln E[TWAP] - ln K) / sd
+	DF       float64      `json:"df,omitempty"`      // 本次计算使用的 Student-t 自由度（0 为正态）
+	BidUp    float64      `json:"bidUp"`
+	AskUp    float64      `json:"askUp"`
+	AskDn    float64      `json:"askDn"`
+	FeeUp    float64      `json:"feeUp,omitempty"` // 买 Up 每股手续费
+	FeeDn    float64      `json:"feeDn,omitempty"` // 买 Down 每股手续费
+	EdgeUp   float64      `json:"edgeUp"`
+	EdgeDn   float64      `json:"edgeDn"`
+	K        float64      `json:"k"`
+	KSrc     string       `json:"kSrc"`
+	KErrBp   float64      `json:"kErrBp,omitempty"`
+	EndErrBp float64      `json:"endErrBp,omitempty"`
+	Spot     float64      `json:"spot"` // 当前价（Chainlink 口径）
+	SdBp     float64      `json:"sdBp"`
+	Tau      int64        `json:"tau"`
+	At       time.Time    `json:"at"`
+}
+
+// UpdateParams 热更新影子策略阈值与 Student-t 自由度（从 Web 配置页保存后立即生效，无需重启）。
+func (p *PMShadow) UpdateParams(minEdge, df float64) {
+	p.mu.Lock()
+	if minEdge > 0 {
+		p.minEdge = minEdge
+	}
+	if df >= 0 {
+		p.df = df
+	}
+	p.mu.Unlock()
 }
 
 // WithSource 设置数据源：用于在 15m / 1h 盘开始 5 分钟后尽快补拉同一时刻开始的 5m 事件，拿到精确起始价。
@@ -460,18 +479,21 @@ func (p *PMShadow) eval(ctx context.Context, now time.Time, t PMBookTarget, b ds
 		e.Reason = "现价中断"
 		return e
 	}
-	e.OK, e.P, e.SdBp, e.Tau = true, r.P, r.SdBp, r.Tau
+	e.OK, e.P, e.NormalP, e.Z, e.DF, e.SdBp, e.Tau = true, r.P, pmstrat.Phi(r.Score), r.Score, p.df, r.SdBp, r.Tau
+	e.KErrBp, e.EndErrBp = k.errBp, p.basisErr[a]
 	if n := len(recent); n > 0 {
 		e.Spot = recent[n-1].P / (1 + p.basis[a])
 	}
 	e.EdgeUp, e.EdgeDn = math.Inf(-1), math.Inf(-1)
 	if len(b.Asks) > 0 {
 		e.AskUp = b.Asks[0].Price
+		e.FeeUp = t.Fee * e.AskUp * (1 - e.AskUp)
 		e.EdgeUp = pmstrat.Edge(r.P, e.AskUp, t.Fee)
 	}
 	if len(b.Bids) > 0 {
 		e.BidUp = b.Bids[0].Price
 		e.AskDn = 1 - e.BidUp // Down 的卖一 = 1 − Up 的买一
+		e.FeeDn = t.Fee * e.AskDn * (1 - e.AskDn)
 		e.EdgeDn = pmstrat.Edge(1-r.P, e.AskDn, t.Fee)
 	}
 	return e
@@ -521,20 +543,23 @@ func (p *PMShadow) fetchStartPrice(asset string, start int64, now time.Time) {
 	}()
 }
 
-// PMShadowStatus 是影子模式状态。
+// PMShadowStatus 是影子模式状态（含模型白盒元数据）。
 type PMShadowStatus struct {
-	Strategy string             `json:"strategy"`
-	MinEdge  float64            `json:"minEdge"`
-	Evals    []PMEval           `json:"evals"`
-	Signals  int64              `json:"signals"` // 本进程记录的信号数
-	Basis    map[string]float64 `json:"basis"`
-	BasisN   map[string]int     `json:"basisN"`
-	Sigma    map[string]float64 `json:"sigma"` // 每 √秒
-	BasisErr map[string]float64 `json:"basisErr"`
-	PTBLag   float64            `json:"ptbLag"` // 可以开始查询到取到起始价的延迟中位数（秒），0 为还没有样本
-	LastTick time.Time          `json:"lastTick,omitzero"`
-	LastErr  string             `json:"lastErr,omitempty"`
-	ErrAt    time.Time          `json:"errAt,omitzero"`
+	Strategy     string             `json:"strategy"`
+	MinEdge      float64            `json:"minEdge"`
+	DF           float64            `json:"df"`           // Student-t 自由度（0 为正态）
+	Distribution string             `json:"distribution"` // 概率分布描述
+	VolMode      string             `json:"volMode"`      // 波动率算法描述
+	Evals        []PMEval           `json:"evals"`
+	Signals      int64              `json:"signals"` // 本进程记录的信号数
+	Basis        map[string]float64 `json:"basis"`
+	BasisN       map[string]int     `json:"basisN"`
+	Sigma        map[string]float64 `json:"sigma"` // 每 √秒
+	BasisErr     map[string]float64 `json:"basisErr"`
+	PTBLag       float64            `json:"ptbLag"` // 可以开始查询到取到起始价的延迟中位数（秒），0 为还没有样本
+	LastTick     time.Time          `json:"lastTick,omitzero"`
+	LastErr      string             `json:"lastErr,omitempty"`
+	ErrAt        time.Time          `json:"errAt,omitzero"`
 }
 
 func (p *PMShadow) Status() PMShadowStatus {
@@ -560,7 +585,14 @@ func (p *PMShadow) Status() PMShadowStatus {
 			evals[i].EdgeDn = 0
 		}
 	}
-	return PMShadowStatus{Strategy: p.name, MinEdge: p.minEdge, Evals: evals, Signals: p.signals, Basis: cp(p.basis), BasisN: n,
+	dist := "标准正态 Φ(z)"
+	if p.df > 2 {
+		dist = fmt.Sprintf("Student-t(df=%.1f) 厚尾分布", p.df)
+	}
+	return PMShadowStatus{
+		Strategy: p.name, MinEdge: p.minEdge, DF: p.df, Distribution: dist, VolMode: "BlendedSigma (30m + 5m 实现波动率混合)",
+		Evals: evals, Signals: p.signals, Basis: cp(p.basis), BasisN: n,
 		Sigma: cp(p.sigmaOf), BasisErr: cp(p.basisErr), PTBLag: pmstrat.Median(append([]float64(nil), p.ptbLag...)),
-		LastTick: p.lastTick, LastErr: p.lastErr, ErrAt: p.errAt}
+		LastTick: p.lastTick, LastErr: p.lastErr, ErrAt: p.errAt,
+	}
 }

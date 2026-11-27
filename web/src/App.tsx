@@ -48,7 +48,7 @@ const NotesPage = lazy(() => import('./NotesPage'))
 const Crypto = lazy(() => import('./Crypto'))
 const Predict = lazy(() => import('./Predict'))
 
-type Auth = 'checking' | 'in' | 'out'
+type Auth = 'checking' | 'setup' | 'in' | 'out'
 
 type PageDef = {
   path: string
@@ -107,9 +107,13 @@ export default function App() {
 
   useEffect(() => {
     setUnauthorizedHandler(() => setAuth('out'))
-    api.me().then(
-      () => setAuth('in'),
-      () => setAuth('out'),
+    api.authStatus().then(
+      (r) => setAuth(!r.initialized ? 'setup' : r.authenticated ? 'in' : 'out'),
+      () =>
+        api.me().then(
+          () => setAuth('in'),
+          () => setAuth('out'),
+        ),
     )
     const onHash = () => {
       setPath(currentPath())
@@ -149,7 +153,7 @@ export default function App() {
       </div>
     )
   }
-  if (auth === 'out') return <Login onDone={() => setAuth('in')} />
+  if (auth === 'out' || auth === 'setup') return <Login needsSetup={auth === 'setup'} onDone={() => setAuth('in')} />
 
   const page = PAGES.find((x) => x.path === path) ?? PAGES[0]
 

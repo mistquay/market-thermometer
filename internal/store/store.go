@@ -179,6 +179,10 @@ func OpenWithTick(path, tickPath string) (*Store, error) {
 		closeAll()
 		return nil, fmt.Errorf("migrate stock watch: %w", err)
 	}
+	if err := st.migrateAppConfig(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("migrate app config: %w", err)
+	}
 	if err := st.migrateLegacyPMBookToTick(); err != nil {
 		closeAll()
 		return nil, fmt.Errorf("migrate pm tick split: %w", err)

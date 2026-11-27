@@ -437,6 +437,107 @@ export default function Overview() {
         </div>
       </section>
 
+      {/* 算法与生效参数白盒透视 */}
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong className="text-sm font-semibold">算法与生效参数白盒透视（全过程可追溯）</strong>
+            <span className="tag tag-cold">{data.paramsName || '生效参数集'}</span>
+            <span className="tag tag-muted mono">版本 {data.paramsVersion}</span>
+            <span className={`tag ${p.skipTPct ? 'tag-ok' : 'tag-muted'}`}>
+              {p.skipTPct ? '方案 C：跳过二次分位（开启）' : '二次分位（开启）'}
+            </span>
+            <span className={`tag ${(p.signal as Record<string, unknown> | undefined)?.topOnlyExpensive ? 'tag-ok' : 'tag-muted'}`}>
+              {(p.signal as Record<string, unknown> | undefined)?.topOnlyExpensive ? '仅估值昂贵时卖顶（开启）' : '全估值档卖顶'}
+            </span>
+          </div>
+          <a href="#/backtest" className="link text-xs">
+            去回测页调参与消融诊断 →
+          </a>
+        </div>
+        <div className="grid grid-cols-1 gap-4 p-5 lg:grid-cols-3">
+          {/* 1. 估值层公式追踪 */}
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-subtle)] p-4">
+            <div className="text-xs font-semibold text-[var(--ink)]">① 估值层 V 推导（{d.date}）</div>
+            <div className="mt-2 space-y-1.5 text-xs text-[var(--ink-2)]">
+              <div className="mono">
+                ERP = 1 / PE(T-1) − Y10(T-1)
+                {data.raw?.pe != null && data.raw?.bondY10 != null && (
+                  <>
+                    <br />= 1 / {data.raw.pe.toFixed(2)} − {data.raw.bondY10.toFixed(2)}% ={' '}
+                    <strong className="text-[var(--ink)]">{fmt(d.erp === null ? null : d.erp * 100, 2, '%')}</strong>
+                  </>
+                )}
+              </div>
+              <div>
+                近 <span className="mono">{String(p.valuationWindow ?? 2520)}</span> 交易日历史分位取反 →{' '}
+                <strong className="mono text-[var(--ink)]">V = {fmt(d.v)}</strong>
+              </div>
+              <div>
+                阈值：便宜 ≤ <span className="mono">{p.cheapBelow}</span> · 昂贵 ≥ <span className="mono">{p.expensiveAbove}</span> · 滞回{' '}
+                <span className="mono">±{String(p.tierHysteresis ?? 5)}</span> →{' '}
+                <strong style={{ color: tierColor }}>{TIER_TEXT[d.tier] ?? '—'}</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. 择时层公式追踪 */}
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-subtle)] p-4">
+            <div className="text-xs font-semibold text-[var(--ink)]">② 择时层 T_s 推导</div>
+            <div className="mt-2 space-y-1.5 text-xs text-[var(--ink-2)]">
+              <div>
+                权重 <span className="mono">[{p.weights.join(', ')}]</span>（窗口 <span className="mono">{String(p.timingWindow ?? 750)}</span> 日）
+              </div>
+              <div className="mono">
+                T1={fmt(d.t[0], 0)} · T2={fmt(d.t[1], 0)} · T3={p.weights[2] > 0 ? fmt(d.t[2], 0) : '关'} · T4={fmt(d.t[3], 0)} →{' '}
+                <strong className="text-[var(--ink)]">T_base = {fmt(d.tBase)}</strong>
+              </div>
+              <div>
+                {p.skipTPct ? (
+                  <>
+                    已开启方案 C（避免单边市被二次拉伸），直接 EMA(<span className="mono">{String(p.emaSpan ?? 3)}</span>日) →{' '}
+                    <strong className="mono text-[var(--ink)]">T_s = {fmt(d.tS)}</strong>
+                  </>
+                ) : (
+                  <>
+                    近 3 年二次分位 <span className="mono">T_pct = {fmt(d.tPct)}</span> → EMA(<span className="mono">{String(p.emaSpan ?? 3)}</span>日) →{' '}
+                    <strong className="mono text-[var(--ink)]">T_s = {fmt(d.tS)}</strong>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 3. 分层仓位推导 */}
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--bg-subtle)] p-4">
+            <div className="text-xs font-semibold text-[var(--ink)]">③ 分层目标仓位推导</div>
+            <div className="mt-2 space-y-1.5 text-xs text-[var(--ink-2)]">
+              {data.position ? (
+                <>
+                  <div className="mono">
+                    底仓({TIER_TEXT[data.position.tier] ?? '合理'}) {(data.position.base * 100).toFixed(0)}%{' '}
+                    {data.position.overlay >= 0 ? '+' : '−'} 信号加减仓 {Math.abs(data.position.overlay * 100).toFixed(0)}% ={' '}
+                    <strong className="text-[var(--accent)]">{(data.position.weight * 100).toFixed(0)}%</strong>
+                  </div>
+                  <div>
+                    当前状态机：<strong>{PHASE_TEXT[data.phase ?? ''] ?? '—'}</strong>
+                    {data.position.lastSignal ? ` · 最近有效信号：${data.position.lastSignal}` : ' · 暂无叠加信号'}
+                  </div>
+                </>
+              ) : (
+                <div>暂无仓位推导数据。</div>
+              )}
+              <div className="text-[11px] text-[var(--ink-3)]">
+                底仓规则：便宜 {Math.round(((p.position as Record<string, number> | undefined)?.baseCheap ?? 0.8) * 100)}% / 合理{' '}
+                {Math.round(((p.position as Record<string, number> | undefined)?.baseFair ?? 0.5) * 100)}% / 昂贵{' '}
+                {Math.round(((p.position as Record<string, number> | undefined)?.baseExpensive ?? 0.2) * 100)}%，信号步长 ±
+                {Math.round(((p.position as Record<string, number> | undefined)?.step ?? 0.2) * 100)}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* 择时层四维度拆解 */}
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--line)] px-5 py-3.5">
@@ -611,7 +712,7 @@ export default function Overview() {
       )}
 
       <p className="disclaimer">
-        温度与估值档仅描述市场相对历史的位置，阈值需在「策略回测」页校准，当前默认参数的回测表现并不理想，不构成投资建议。
+        温度与估值档仅描述市场相对历史的位置，所有参数与计算步骤均已在上方白盒面板完整呈现；可在「策略回测」页自由调整并对比消融结果，不构成投资建议。
       </p>
     </div>
   )

@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"market-thermometer/internal/config"
 	ds "market-thermometer/internal/datasource"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
@@ -36,6 +37,8 @@ type Options struct {
 	PMBook        *job.PMBookCollector // 盘口采集器；为 nil 时不采集
 	PMShadow      *job.PMShadow        // 策略影子模式；为 nil 时未启用
 	PMArb         *job.PMArbMonitor    // 后台套利扫描器；为 nil 时按需创建
+	Config        *config.Config       // 启动时生效的完整配置（只读回退）
+	ConfigSource  string               // 配置来源：db | default | imported
 }
 
 type Server struct {
@@ -68,11 +71,17 @@ func New(opt Options, st *store.Store, hub *ds.Hub, runner *job.Runner) *Server 
 
 func (s *Server) Handler() http.Handler {
 	api := http.NewServeMux()
+	api.HandleFunc("GET /api/auth/status", s.authStatus)
+	api.HandleFunc("POST /api/auth/setup", s.authSetup)
 	api.HandleFunc("POST /api/auth/login", s.login)
 	api.HandleFunc("POST /api/auth/logout", s.auth(s.logout))
+	api.HandleFunc("POST /api/auth/password", s.auth(s.authChangePassword))
 	api.HandleFunc("GET /api/auth/me", s.auth(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}))
+	api.HandleFunc("GET /api/config", s.auth(s.configGet))
+	api.HandleFunc("PUT /api/config", s.auth(s.configSave))
+	api.HandleFunc("POST /api/config/reset", s.auth(s.configReset))
 	api.HandleFunc("GET /api/metrics", s.auth(s.metrics))
 	api.HandleFunc("GET /api/series", s.auth(s.series))
 	api.HandleFunc("GET /api/overview", s.auth(s.overview))
@@ -228,7 +237,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad request")
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(s.opt.PasswordHash), []byte(req.Password)) != nil {
+	pwHash, err := s.passwordHash(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if pwHash == "" {
+		writeErr(w, http.StatusPreconditionRequired, "尚未初始化管理员口令，请先设置口令")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.Password)) != nil {
 		s.limiter.Fail(ip, now)
 		writeErr(w, http.StatusUnauthorized, "口令错误")
 		return

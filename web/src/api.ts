@@ -144,12 +144,44 @@ export type Overview = {
   market: string
   index: string
   paramsVersion: string
+  paramsName?: string
   params: Params
+  raw?: { pe?: number | null; peDate?: string; bondY10?: number | null; bondDate?: string }
+  position?: { tier: string; base: number; overlay: number; weight: number; lastSignal?: string }
   last?: DayScore
   prev?: DayScore
   recent?: { date: string; close: Num; tS: Num; v: Num }[]
   phase?: string
   recentEvents?: SignalEvent[] | null
+}
+
+export type AppConfig = {
+  listen: string
+  dbPath: string
+  tickDbPath: string
+  httpProxy: string
+  backfillStart: string
+  sources: { enabled: string[] | null; routes: Record<string, string[]>; options: Record<string, Record<string, unknown>> }
+  stocks: { sources: string[] | null; fundSources: string[] | null; skipFunds: boolean; concurrency: number; options: Record<string, Record<string, unknown>> }
+  funds: { sources: string[] | null }
+  plugins?: { dir: string; command: string[]; timeoutS: number; config?: Record<string, string>; disabled?: boolean }[] | null
+  crypto: { sources: string[] | null; symbols: string[] | null; history: Record<string, number>; everyMin: number; proxy: boolean; options: Record<string, Record<string, unknown>> }
+  polymarket: {
+    source: string; series: string[] | null; historyDays: number; everyMin: number; proxy: boolean
+    book: { everyMs: number; levels: number; keepDays: number; series?: string[] | null; ws: boolean }
+    strategy: { shadow: boolean; minEdge: number; df: number }
+  }
+}
+export type AppConfigResp = {
+  config: AppConfig
+  defaults: AppConfig
+  source: string
+  updatedAt: string
+  dbPath: string
+  tickDbPath: string
+  hotReloadKeys: string[]
+  restartKeys: string[]
+  pluginsReadOnly: boolean
 }
 
 export type ScoreSeries = {
@@ -329,11 +361,13 @@ export type PMBookState =
       stats: { books: number; tokens: number; spots: number; first: number; last: number } }
 export type BookSnap = { t: number; bids: BookLevel[]; asks: BookLevel[] }
 export type PMEval = {
-  target: PMBookTarget; ok: boolean; reason?: string; p: number; bidUp: number; askUp: number; askDn: number
-  edgeUp: number; edgeDn: number; k: number; kSrc: string; spot: number; sdBp: number; tau: number; at: string
+  target: PMBookTarget; ok: boolean; reason?: string; p: number; normalP?: number; z?: number; df?: number
+  bidUp: number; askUp: number; askDn: number; feeUp?: number; feeDn?: number
+  edgeUp: number; edgeDn: number; k: number; kSrc: string; kErrBp?: number; endErrBp?: number; spot: number; sdBp: number; tau: number; at: string
 }
 export type PMShadowStatus = {
-  strategy: string; minEdge: number; evals: PMEval[] | null; signals: number; basis: Record<string, number>; basisN: Record<string, number>
+  strategy: string; minEdge: number; df?: number; distribution?: string; volMode?: string
+  evals: PMEval[] | null; signals: number; basis: Record<string, number>; basisN: Record<string, number>
   sigma: Record<string, number>; basisErr: Record<string, number>; ptbLag: number; lastTick?: string; lastErr?: string; errAt?: string
 }
 export type PMSignal = {
@@ -426,6 +460,14 @@ export type PMOrderReq = {
 }
 
 export const api = {
+  authStatus: () => request<{ initialized: boolean; authenticated: boolean }>('GET', '/api/auth/status'),
+  authSetup: (password: string) => request<{ ok: boolean }>('POST', '/api/auth/setup', { password }),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('POST', '/api/auth/password', { oldPassword, newPassword }),
+  appConfig: () => request<AppConfigResp>('GET', '/api/config'),
+  saveAppConfig: (cfg: AppConfig) =>
+    request<{ ok: boolean; config: AppConfig; hotApplied?: string[]; restartRequired?: boolean }>('PUT', '/api/config', cfg),
+  resetAppConfig: () => request<{ ok: boolean; config: AppConfig; restartRequired?: boolean }>('POST', '/api/config/reset'),
   me: () => request<{ ok: boolean }>('GET', '/api/auth/me'),
   login: (password: string) => request<{ ok: boolean }>('POST', '/api/auth/login', { password }),
   logout: () => request<{ ok: boolean }>('POST', '/api/auth/logout'),

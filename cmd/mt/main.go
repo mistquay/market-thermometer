@@ -39,6 +39,7 @@ import (
 	_ "market-thermometer/internal/datasource/tdx"
 	_ "market-thermometer/internal/datasource/tencent"
 	_ "market-thermometer/internal/derived/ma200"
+	"market-thermometer/internal/engine"
 	"market-thermometer/internal/importer"
 	"market-thermometer/internal/job"
 	"market-thermometer/internal/market"
@@ -86,6 +87,8 @@ func main() {
 		err = cmdGapFill(os.Args[2:])
 	case "score":
 		err = cmdScore(os.Args[2:])
+	case "config":
+		err = cmdConfig(os.Args[2:])
 	case "hashpw":
 		err = cmdHashPW()
 	default:
@@ -97,32 +100,118 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|crypto|polymarket|pmbook|gapfill|import-bars|ext-backfill|hashpw [-c config.yaml]")
+	fmt.Fprintln(os.Stderr, "用法: mt serve|sync|breadth|score|config|crypto|polymarket|pmbook|pmeval|gapfill|import-bars|ext-backfill|hashpw [-db data/mt.db] [-listen 127.0.0.1:8080]")
 	os.Exit(2)
 }
 
 type app struct {
-	cfg    *config.Config
-	store  *store.Store
-	hub    *ds.Hub
-	runner *job.Runner
-	crypto *job.CryptoSyncer
-	pm     *job.PMSyncer
-	pmBook *job.PMBookCollector
-	shadow *job.PMShadow
+	cfg       *config.Config
+	cfgSource string
+	store     *store.Store
+	hub       *ds.Hub
+	runner    *job.Runner
+	crypto    *job.CryptoSyncer
+	pm        *job.PMSyncer
+	pmBook    *job.PMBookCollector
+	shadow    *job.PMShadow
+}
+
+func defaultDBPath() string {
+	if v := strings.TrimSpace(os.Getenv("MT_DB")); v != "" {
+		return v
+	}
+	return "data/mt.db"
 }
 
 func setup(fs *flag.FlagSet, args []string) (*app, error) {
-	cfgPath := fs.String("c", "config.yaml", "配置文件路径")
+	cfgPath := fs.String("c", "", "可选：旧版 config.yaml 路径（留空则零配置启动，完全从数据库读取配置）")
+	dbFlag := fs.String("db", "", "SQLite 主数据库路径（默认 data/mt.db，可用环境变量 MT_DB 覆盖）")
+	tickFlag := fs.String("tick-db", "", "可选：高频盘口快照 SQLite 路径（默认自动推导 *-tick.db）")
+	listenFlag := fs.String("listen", "", "可选：临时覆盖 HTTP 监听地址（如 127.0.0.1:8091）")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	cfg, err := config.Load(*cfgPath)
+
+	var (
+		cfg       *config.Config
+		cfgSource string
+		yamlCfg   *config.Config
+	)
+	dbPath := *dbFlag
+	tickPath := *tickFlag
+	if *cfgPath != "" {
+		var err error
+		yamlCfg, err = config.Load(*cfgPath)
+		if err != nil {
+			return nil, err
+		}
+		if dbPath == "" {
+			dbPath = yamlCfg.DBPath
+		}
+		if tickPath == "" {
+			tickPath = yamlCfg.TickDBPath
+		}
+	}
+	if dbPath == "" {
+		dbPath = defaultDBPath()
+	}
+	if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	st, err := store.OpenWithTick(dbPath, tickPath)
 	if err != nil {
 		return nil, err
 	}
-	st, err := store.OpenWithTick(cfg.DBPath, cfg.TickDBPath)
-	if err != nil {
+	ctx := context.Background()
+	now := time.Now()
+	switch {
+	case yamlCfg != nil:
+		cfg, cfgSource = yamlCfg, "yaml"
+		// 若数据库内尚无配置，首次顺带落库，方便后续彻底摆脱 config.yaml
+		if _, _, _, exists, err := st.LoadAppConfig(ctx); err == nil && !exists {
+			_ = st.SaveAppConfig(ctx, yamlCfg, "imported", now)
+			if yamlCfg.AdminPasswordHash != "" {
+				_ = st.SaveAdminPasswordHash(ctx, yamlCfg.AdminPasswordHash, now)
+			}
+		}
+	default:
+		dbCfg, src, _, exists, err := st.LoadAppConfig(ctx)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("load db config: %w", err)
+		}
+		if exists {
+			cfg, cfgSource = dbCfg, src
+		} else if legacy, lerr := config.Load("config.yaml"); lerr == nil {
+			// 自动一次性迁移旧版 config.yaml 到数据库
+			cfg, cfgSource = legacy, "imported"
+			if err := st.SaveAppConfig(ctx, legacy, "imported", now); err != nil {
+				st.Close()
+				return nil, fmt.Errorf("import config.yaml to db: %w", err)
+			}
+			if legacy.AdminPasswordHash != "" {
+				_ = st.SaveAdminPasswordHash(ctx, legacy.AdminPasswordHash, now)
+			}
+			log.Printf("已将旧版 config.yaml 自动迁移至数据库 app_config（后续可直接零配置启动）")
+		} else {
+			// 全新零配置启动：写入内置默认配置 + 校准后的默认温度计参数
+			cfg, cfgSource = config.Default(), "default"
+			cfg.DBPath, cfg.TickDBPath = dbPath, tickPath
+			if err := st.SaveAppConfig(ctx, cfg, "default", now); err != nil {
+				st.Close()
+				return nil, fmt.Errorf("init default config: %w", err)
+			}
+			if sets, serr := st.ListParams(ctx); serr == nil && len(sets) == 0 {
+				_ = st.SaveParams(ctx, "方案C+昂贵卖顶（默认校准）", engine.CalibratedParams(), true, now)
+			}
+			log.Printf("零配置启动：已初始化内置默认配置到 %s（可在 Web「系统设置」页修改）", dbPath)
+		}
+	}
+	if *listenFlag != "" {
+		cfg.Listen = *listenFlag
+	}
+	if err := cfg.Normalize(); err != nil {
+		st.Close()
 		return nil, err
 	}
 	enabled := cfg.Sources.Enabled
@@ -234,7 +323,7 @@ func setup(fs *flag.FlagSet, args []string) (*app, error) {
 		shadow = job.NewPMShadow(st, cfg.Polymarket.Strategy.MinEdge).WithDF(cfg.Polymarket.Strategy.DF).WithSource(pm.Source())
 		pmBook.OnTick(shadow.Tick)
 	}
-	return &app{cfg: cfg, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook, shadow: shadow}, nil
+	return &app{cfg: cfg, cfgSource: cfgSource, store: st, hub: hub, runner: runner, crypto: crypto, pm: pm, pmBook: pmBook, shadow: shadow}, nil
 }
 
 // outboundTransport 返回出站请求的 Transport：proxy=true 且配置了 http_proxy 时经代理，否则直连。
@@ -303,7 +392,7 @@ func cmdServe(args []string) error {
 	defer a.store.Close()
 	defer ext.CloseAll()
 	if a.cfg.AdminPasswordHash == "" {
-		return errors.New("config.yaml 未设置 admin_password_hash：先运行 `mt hashpw` 生成")
+		log.Printf("首次零配置启动：尚未设置管理员口令，请浏览器访问 http://%s 完成初始化（无需 config.yaml）", a.cfg.Listen)
 	}
 	if err := a.store.FailStaleJobs(context.Background(), time.Now()); err != nil {
 		return err
@@ -341,6 +430,8 @@ func cmdServe(args []string) error {
 			PMBook:        a.pmBook,
 			PMShadow:      a.shadow,
 			PMArb:         pmArb,
+			Config:        a.cfg,
+			ConfigSource:  a.cfgSource,
 		}, a.store, a.hub, a.runner).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
